@@ -1,0 +1,12 @@
+{
+	"name": "TestClient",
+	"version": "0.0.1",
+	"description": "Test client",
+	"main": "app.js",
+	"scripts": {
+		"start": "node app.js"
+	},
+	"author": "Stranger",
+	"license": "MIT"
+}
+
