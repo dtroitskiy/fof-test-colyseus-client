@@ -122,7 +122,7 @@ CombatSystem.prototype = {
 		creature.mapPos = mapPos;
 		var newMapTileX = mapPos.x / CombatConsts.MAP_TILE_SIZE | 0;
 		var newMapTileY = mapPos.y / CombatConsts.MAP_TILE_SIZE | 0;
-		if(newMapTileX != creature.mapTileX || newMapTileY != creature.mapTileY) {
+		if((newMapTileX != creature.mapTileX || newMapTileY != creature.mapTileY) && this.getTileState(newMapTileX,newMapTileY,creature.mapTileZ) == CombatConsts.MAP_TILE_FREE) {
 			this.setTileState(creature.mapTileX,creature.mapTileY,creature.mapTileZ,CombatConsts.MAP_TILE_FREE);
 			creature.mapTileX = newMapTileX;
 			creature.mapTileY = newMapTileY;
@@ -197,7 +197,7 @@ CombatSystem.prototype = {
 				creature.mapPos = self12;
 				var newMapTileX = creature.mapPos.x / CombatConsts.MAP_TILE_SIZE | 0;
 				var newMapTileY = creature.mapPos.y / CombatConsts.MAP_TILE_SIZE | 0;
-				if(newMapTileX != creature.mapTileX || newMapTileY != creature.mapTileY) {
+				if((newMapTileX != creature.mapTileX || newMapTileY != creature.mapTileY) && this.getTileState(newMapTileX,newMapTileY,creature.mapTileZ) == CombatConsts.MAP_TILE_FREE) {
 					this.setTileState(creature.mapTileX,creature.mapTileY,creature.mapTileZ,CombatConsts.MAP_TILE_FREE);
 					creature.mapTileX = newMapTileX;
 					creature.mapTileY = newMapTileY;

@@ -31,7 +31,17 @@ let lastUpdateTime = 0;
 
 function connect()
 {
-	const client = new Colyseus.Client('ws://localhost:8080');
+	let url = '';
+	if (location.hostname == 'localhost')
+	{
+		url = 'ws://localhost:8080';
+	}
+	else
+	{
+		url = 'ws://' + location.hostname + ':8080';
+		//url = 'wss://' + location.hostname.replace('client', 'server');
+	}
+	const client = new Colyseus.Client(url);
 
 	client.onOpen.add(function()
 	{
