@@ -38,8 +38,7 @@ function connect()
 	}
 	else
 	{
-		url = 'ws://' + location.hostname + ':8080';
-		//url = 'wss://' + location.hostname.replace('client', 'server');
+		url = 'wss://' + location.hostname.replace('client', 'server');
 	}
 	const client = new Colyseus.Client(url);
 
