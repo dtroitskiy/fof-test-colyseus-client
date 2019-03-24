@@ -146,12 +146,16 @@ function initCombatSystem(data)
 
 function createPlayer(data)
 {
-	let player = {};
+	const player = new CombatPlayer();
 	player.id = data.id;
 	player.mapTileX = data.mapTileX;
 	player.mapTileY = data.mapTileY;
 	player.mapTileZ = data.mapTileZ;
-	player.abilities = data.abilities;
+	player.abilities = new CombatAbilities();
+	for (let i in data.abilities)
+	{
+		player.abilities[i] = data.abilities[i];
+	}
 	
 	if (data.me) me = player;
 	players[player.id] = player;
@@ -263,17 +267,17 @@ document.addEventListener('DOMContentLoaded', function()
 	}
 	else
 	{
-		const data = { 'mapWidth': TEST_MAP_WIDTH, 'mapHeight': TEST_MAP_HEIGHT };
-		initCombatSystem(data);
-		data = {
+		const combatSystemData = { 'mapWidth': TEST_MAP_WIDTH, 'mapHeight': TEST_MAP_HEIGHT };
+		initCombatSystem(combatSystemData);
+		const playerData = {
 			'id': 'player',
 			'me': true,
 			'mapTileX': TEST_PLAYER_POS.x,
 			'mapTileY': TEST_PLAYER_POS.y,
-			'mapTileZ': CombatConsts.GROUND_FLOOR,
+			'mapTileZ': CombatConsts.MAP_GROUND_FLOOR,
 			'abilities': TEST_PLAYER_ABILITIES
 		};
-		createPlayer(data);
+		createPlayer(playerData);
 		resize();
 		update(0);
 	}
