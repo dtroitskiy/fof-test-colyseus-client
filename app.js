@@ -24,6 +24,10 @@ http.createServer(function(req, res)
 			{
 				contentType = 'application/wasm';
 			}
+			else if (url.indexOf('.data') != -1)
+			{
+				contentType = 'application/octet-stream';
+			}
 			else
 			{
 				contentType = 'text/html';
@@ -35,4 +39,3 @@ http.createServer(function(req, res)
 	})
 }).listen(port);
 console.log('Listening to %d', port);
-
