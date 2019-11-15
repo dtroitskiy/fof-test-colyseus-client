@@ -10,13 +10,11 @@ const LOADING_V_SPACING_FACTOR = 0.02;
 const TILE_SPACING = 1;
 const TILE_FREE_COLOR = 'rgb(192, 255, 192)';
 const TILE_BLOCKING_COLOR = 'rgb(255, 192, 192)';
-const PLAYER_SIZE_FACTOR = 0.75;
-const PLAYER_COLOR = 'rgb(0, 0, 255)';
-const PLAYER_NAME_FONT = '16px Arial';
-const PLAYER_NAME_COLOR = 'black';
-const PLAYER_NAME_OFFSET_Y = 15;
-
-const FoFcombat = Module;
+const CREATURE_SIZE_FACTOR = 0.75;
+const CREATURE_COLOR = 'rgb(0, 0, 255)';
+const CREATURE_NAME_FONT = '16px Arial';
+const CREATURE_NAME_COLOR = 'black';
+const CREATURE_NAME_OFFSET_Y = 15;
 
 let loadingLabel = 'Initializing', loadingPercentage = 0;
 
@@ -27,9 +25,9 @@ let send = function() {};
 
 let universalTileMap = null, combatSystem = null;
 
-let tileSize = 0, playerSize = 0;
+let creatureIDs = [], playerID = 0;
 
-let players = {}, pendingPlayersToAdd = [], me = null;
+let tileSize = 0, creatureSize = 0;
 
 let lastUpdateTime = 0;
 
@@ -52,13 +50,84 @@ FoFcombat.onRuntimeInitialized = () =>
 	}
 	else
 	{
-		load('test').then(setupCombat, () =>
+		load('test').then(initCombatSystem, () =>
 		{
 			loadingLabel = 'Loading error';
 		});
 	}
 };
 
+// NETWORKING
+function connect()
+{
+	let url = '';
+	if (location.hostname == 'localhost')
+	{
+		// used for local testing
+		url = 'ws://localhost:8080';
+	}
+	else if (location.hostname == '192.168.1.200')
+	{
+		// used for LAN testing
+		url = 'ws://192.168.1.200:8080';
+	}
+	else
+	{
+		// used for remote testing on something like Heroku
+		url = 'wss://' + location.hostname.replace('client', 'server');
+	}
+	const client = new Colyseus.Client(url);
+
+	client.joinOrCreate('test').then(room =>
+	{
+		console.log('Joined room %s', room.name);
+
+		playerID = room.sessionId;
+		send = room.send.bind(room);
+		room.onMessage(handleMessage);
+
+		room.onLeave(() =>
+		{
+		  console.log('Left room %s', room.name);
+		});
+	}).catch(e =>
+	{
+		console.log('Failed to join room!', e);
+	});
+}
+
+function handleMessage(data)
+{
+	switch (data.message)
+	{
+		case 'load':
+			load(data.map).then(() =>
+			{
+				loadingLabel = 'Waiting for server';
+				initCombatSystem();
+			}, () =>
+			{
+				loadingLabel = 'Loading error';
+			});
+		break;
+		case 'addSelf':
+			loadingLabel = null;
+			addSelf(data.position);
+		break;
+		case 'addCreature':
+			addCreature(data.creatureID, data.combatData, data.position)
+		break;
+		case 'movement':
+			// TODO: check may be temporary because server should check whether client is ready to send him movements
+			if (combatSystem)
+			{
+				combatSystem.setCreatureMovement(data.creatureID, data.movementX, data.movementY);
+			}
+		break;
+	}
+}
+
+// LOGIC
 function load(mapName)
 {
 	return new Promise((resolve, reject) =>
@@ -97,152 +166,142 @@ function load(mapName)
 	});
 }
 
-// NETWORKING
-function connect()
-{
-	let url = '';
-	if (location.hostname == 'localhost')
-	{
-		url = 'ws://localhost:8080';
-	}
-	else
-	{
-		url = 'wss://' + location.hostname.replace('client', 'server');
-	}
-	const client = new Colyseus.Client(url);
-
-	client.joinOrCreate('test').then(room =>
-	{
-		console.log('Joined room %s', room.name);
-
-		send = room.send.bind(room);
-		room.onMessage(handleMessage);
-
-		room.onLeave(() =>
-		{
-		  console.log('Left room %s', room.name);
-		});
-	}).catch(e =>
-	{
-		console.log('Failed to join room!', e);
-	});
-
-	/*client.onOpen.add(function()
-	{
-		console.log('Connected!');
-		connected = true;
-	});
-
-	client.onClose.add(function()
-	{
-		console.log('Disconnected!');
-		connected = false;
-	});
-
-	const room = client.join('test');
-	
-	room.onJoin.add(function()
-	{
-		send = room.send.bind(room);
-	});
-	
-	room.onLeave.add(function()
-	{
-		send = function() {};
-	});*/
-	
-	/*room.onMessage.add(function(data)
-	{
-		switch (data.message)
-		{
-			case 'initCombatSystem':
-				initCombatSystem(data);
-				for (let i in pendingPlayersToAdd)
-				{
-					createPlayer(pendingPlayersToAdd[i]);
-				}
-				pendingPlayersToAdd = [];
-				resize();
-				update(0);
-			break;
-		}
-	});*/
-
-	/*room.listen('players/:id', function(change)
-	{
-		if (change.operation === 'add')
-		{
-			const data = change.value;
-			data.me = false;
-			if (data.id == room.sessionId) data.me = true;
-			if (combatSystem)
-			{
-				createPlayer(data);
-			}
-			else
-			{
-				pendingPlayersToAdd.push(data);
-			}
-		}
-		else if (change.operation === 'remove')
-		{
-			removePlayer(change.path.id);
-		}
-	});*/
-	
-	/*room.listen('players/:id/mapPos/:coord', function(change)
-	{
-		if (change.operation != 'replace') return;
-		
-		const player = players[change.path.id];
-		// making current player position copy
-		const pos = { 'x': player.mapPos.x, 'y': player.mapPos.y };
-		pos[change.path.coord] = change.value;
-		
-		// we manually set our own position only if it got desynchronized on more than 1 tile
-		if (player.id == room.sessionId)
-		{
-			if (Math.abs(pos.x - me.mapPos.x) >= CombatConsts.MAP_TILE_SIZE || Math.abs(pos.y - me.mapPos.y) >= CombatConsts.MAP_TILE_SIZE)
-			{
-				console.log('Desynchronized!');
-				combatSystem.setCreaturePos(player.id, pos);
-			}
-		}
-		else
-		{
-			combatSystem.setCreaturePos(player.id, pos);
-		}
-	});*/
-}
-
-function handleMessage(data)
-{
-	switch (data.message)
-	{
-		case 'load':
-			load(data.map).then(() =>
-			{
-				loadingLabel = 'Waiting for server';
-				send({ 'message': 'ready' });
-			}, () =>
-			{
-				loadingLabel = 'Loading error';
-			});
-		break;
-		case 'init':
-			loadingLabel = null;
-			setupCombat();
-		break;
-	}
-}
-
-// LOGIC
-function setupCombat()
+function initCombatSystem()
 {
 	universalTileMap = Loader.universalTileMap;
 	combatSystem = new FoFcombat.CombatSystem(universalTileMap, '/res/scripts/');
 
+	let playerCombatData = combatSystem.preparePlayerCombatData(0);
+	playerCombatData = convertCreatureCombatDataToPlainObject(playerCombatData);
+
+	send({ 'message': 'addMe', 'combatData': playerCombatData });
+
 	resize(); // needed to update tile and other objects sizes based on map size
+}
+
+function convertCreatureCombatDataToPlainObject(combatData)
+{
+	const converted = {};
+	
+	converted.creatureObjectID = combatData.creatureObjectID;
+	converted.exp = combatData.exp;
+	converted.level = combatData.level;
+	
+	converted.abilities = {};
+	for (let i in combatData.abilities)
+	{
+		const a = combatData.abilities[i];
+		if (typeof(a) == 'number')
+		{
+			converted.abilities[i] = a;
+		}
+	}
+
+	converted.equipment = {};
+	for (let i in combatData.equipment)
+	{
+		const e = combatData.equipment[i];
+		if (typeof(e) == 'number')
+		{
+			converted.equipment[i] = e;
+		}
+	}
+
+	converted.spells = [];
+	for (let i = 0; i < combatData.spells.size(); ++i)
+	{
+		const s = combatData.spells.get(i);
+		converted.spells.push({ 'id': s.id, 'level': s.level });
+	}
+
+	converted.talents = [];
+	for (let i = 0; i < combatData.talents.size(); ++i)
+	{
+		const t = combatData.talents.get(i);
+		converted.talents.push({ 'id': t.id, 'level': t.level });
+	}
+
+	return converted;
+}
+
+function makeCreatureCombatDataFromPlainObject(data)
+{
+	const combatData = new FoFcombat.CreatureCombatData();
+
+	combatData.creatureObjectID = data.creatureObjectID;
+	combatData.exp = data.exp;
+	combatData.level = data.level;
+	
+	const abilities = new FoFcombat.CombatAbilities();
+	for (let i in data.abilities)
+	{
+		const a = data.abilities[i];
+		abilities[i] = a;
+	}
+	combatData.abilities = abilities;
+	
+	const equipment = new FoFcombat.CombatEquipment();
+	for (let i in data.equipment)
+	{
+		const e = data.equipment[i];
+		equipment[i] = e;
+	}
+	combatData.equipment = equipment;
+
+	const spells = new FoFcombat.VectorCombatSpell();
+	for (let i in data.spells)
+	{
+		const s = data.spells[i];
+		const cs = new FoFcombat.CombatSpell();
+		cs.id = s.id;
+		cs.level = s.level;
+		spells.push_back(cs);
+	}
+	combatData.spells = spells;
+
+	const talents = new FoFcombat.VectorCombatTalent();
+	for (let i in data.talents)
+	{
+		const t = data.talents[i];
+		const ct = new FoFcombat.CombatTalent();
+		ct.id = t.id;
+		ct.level = t.level;
+		talents.push_back(ct);
+	}
+	combatData.talents = talents;
+
+	return combatData;
+}
+
+function addSelf(pos)
+{
+	combatSystem.addPlayer(playerID, 0);
+	combatSystem.setCreatureFloor(playerID, pos.z);
+	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(pos.x, pos.y));
+	creatureIDs.push(playerID);
+}
+
+function addCreature(creatureID, combatData, position)
+{
+	combatSystem.addCreature(creatureID, makeCreatureCombatDataFromPlainObject(combatData));
+	combatSystem.setCreatureFloor(creatureID, position.z);
+	combatSystem.setCreaturePosition(creatureID, new FoFcombat.Vector2(position.x, position.y));
+	creatureIDs.push(creatureID);
+}
+
+function handleMovement()
+{
+	if (!combatSystem) return;
+
+	let movementX = 0, movementY = 0;
+	if (leftPressed) movementX -= 1;
+	if (rightPressed) movementX += 1;
+	if (upPressed) movementY -= 1;
+	if (downPressed) movementY += 1;
+
+	combatSystem.setCreatureMovement(playerID, movementX, movementY);
+
+	send({ 'message': 'movement', 'movementX': movementX, 'movementY': movementY });
 }
 
 function update(time)
@@ -250,51 +309,14 @@ function update(time)
 	let dt = (time - lastUpdateTime) / 1000;
 	lastUpdateTime = time;
 	
-	//handleMovement();
+	handleMovement();
 	
-	//combatSystem.tick(dt);
+	if (combatSystem) combatSystem.update(dt);
 	
 	draw();
 	
 	requestAnimationFrame(update);
 }
-
-/*function createPlayer(data)
-{
-	const player = new CombatPlayer();
-	player.id = data.id;
-	player.mapTileX = data.mapTileX;
-	player.mapTileY = data.mapTileY;
-	player.mapTileZ = data.mapTileZ;
-	player.abilities = new CombatAbilities();
-	for (let i in data.abilities)
-	{
-		player.abilities[i] = data.abilities[i];
-	}
-	
-	if (data.me) me = player;
-	players[player.id] = player;
-	combatSystem.addPlayer(player);
-}
-
-function removePlayer(id)
-{
-	combatSystem.removePlayerByID(id);
-	delete players[id];
-}*/
-
-/*function handleMovement()
-{
-	if (!me) return;
-
-	me.movementX = me.movementY = 0;
-	if (leftPressed) me.movementX -= 1;
-	if (rightPressed) me.movementX += 1;
-	if (upPressed) me.movementY -= 1;
-	if (downPressed) me.movementY += 1;
-
-	send({ 'message': 'movement', 'movementX': me.movementX, 'movementY': me.movementY });
-}*/
 
 // INPUT
 document.addEventListener('keydown', function(event)
@@ -355,7 +377,7 @@ function resize()
 	{
 		let mapAspect = universalTileMap.width / universalTileMap.height, canvasAspect = canvas.clientWidth / canvas.clientHeight;
 		tileSize = (mapAspect >= canvasAspect) ? (canvas.clientWidth / universalTileMap.width) : (canvas.clientHeight / universalTileMap.height);
-		playerSize = tileSize * PLAYER_SIZE_FACTOR;
+		creatureSize = tileSize * CREATURE_SIZE_FACTOR;
 	}
 }
 
@@ -365,7 +387,7 @@ function draw()
 
 	drawLoading();
 	drawMap();
-	// drawPlayers();
+	drawCreatures();
 }
 
 function drawLoading()
@@ -414,26 +436,30 @@ function drawMap()
 	}
 }
 
-/*function drawPlayers()
+function drawCreatures()
 {
-	let tileSizeFactor = tileSize / CombatConsts.MAP_TILE_SIZE;
-	canvas2d.fillStyle = PLAYER_COLOR;
-	for (let id in players)
+	if (!combatSystem) return;
+
+	let tileSizeFactor = tileSize / FoFcombat.FoFSprite.SIZE;
+	canvas2d.fillStyle = CREATURE_COLOR;
+	for (let i in creatureIDs)
 	{
-		let player = players[id], pos = player.mapPos;
+		const creatureID = creatureIDs[i];
+		const pos = combatSystem.getCreaturePosition(creatureID);
 		let x = pos.x * tileSizeFactor, y = pos.y * tileSizeFactor;
 		canvas2d.beginPath();
-		canvas2d.arc(x, y, playerSize / 2, 0, Math.PI * 2);
+		canvas2d.arc(x, y, creatureSize / 2, 0, Math.PI * 2);
 		canvas2d.fill();
 	}
 	
-	canvas2d.font = PLAYER_NAME_FONT;
-	canvas2d.fillStyle = PLAYER_NAME_COLOR;
-	for (let id in players)
+	canvas2d.font = CREATURE_NAME_FONT;
+	canvas2d.fillStyle = CREATURE_NAME_COLOR;
+	for (let i in creatureIDs)
 	{
-		let player = players[id], pos = player.mapPos;
+		const creatureID = creatureIDs[i];
+		const pos = combatSystem.getCreaturePosition(creatureID);
 		let x = pos.x * tileSizeFactor, y = pos.y * tileSizeFactor;
-		let nameText = player.id + (me && player.id == me.id ? ' (me)' : '');
-		canvas2d.fillText(nameText, x - canvas2d.measureText(nameText).width / 2, y - PLAYER_NAME_OFFSET_Y);
+		let nameText = creatureID + (creatureID == playerID ? ' (me)' : '');
+		canvas2d.fillText(nameText, x - canvas2d.measureText(nameText).width / 2, y - CREATURE_NAME_OFFSET_Y);
 	}
-}*/
+}
