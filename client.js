@@ -115,14 +115,20 @@ function handleMessage(data)
 			addSelf(data.position);
 		break;
 		case 'addCreature':
-			addCreature(data.creatureID, data.combatData, data.position)
+			addCreature(data.creatureID, data.combatData, data.position);
+		break;
+		case 'addCreatures':
+			for (let i in data.creaturesData)
+			{
+				const cd = data.creaturesData[i];
+				addCreature(cd.creatureID, cd.combatData, cd.position);
+			}
 		break;
 		case 'movement':
-			// TODO: check may be temporary because server should check whether client is ready to send him movements
-			if (combatSystem)
-			{
-				combatSystem.setCreatureMovement(data.creatureID, data.movementX, data.movementY);
-			}
+			combatSystem.setCreatureMovement(data.creatureID, data.movementX, data.movementY);
+		break;
+		case 'sync':
+			sync(data.syncData);
 		break;
 	}
 }
@@ -174,7 +180,7 @@ function initCombatSystem()
 	let playerCombatData = combatSystem.preparePlayerCombatData(0);
 	playerCombatData = convertCreatureCombatDataToPlainObject(playerCombatData);
 
-	send({ 'message': 'addMe', 'combatData': playerCombatData });
+	send({ 'message': 'addPlayer', 'combatData': playerCombatData });
 
 	resize(); // needed to update tile and other objects sizes based on map size
 }
@@ -302,6 +308,24 @@ function handleMovement()
 	combatSystem.setCreatureMovement(playerID, movementX, movementY);
 
 	send({ 'message': 'movement', 'movementX': movementX, 'movementY': movementY });
+}
+
+function sync(data)
+{
+	const halfTileSize = FoFcombat.FoFSprite.SIZE / 2;
+	for (let i in data)
+	{
+		const d = data[i];
+		const pos = combatSystem.getCreaturePosition(d.creatureID);
+		if (Math.abs(pos.x - d.position.x) > halfTileSize || Math.abs(pos.y - d.position.y) > halfTileSize)
+		{
+			console.log('Synchronizing position for %s', d.creatureID);
+			pos.x = d.position.x;
+			pos.y = d.position.y;
+			combatSystem.setCreaturePosition(d.creatureID, pos);
+			combatSystem.resetCreatureMovementDirection(d.creatureID);
+		}
+	}
 }
 
 function update(time)
