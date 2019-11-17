@@ -5,16 +5,25 @@ const TEST_PLAYER_POS = { 'x': 20, 'y': 15 };
 
 const LOADING_COLOR = 'rgb(0, 255, 0)';
 const LOADING_FONT = '36px Arial';
-const LOADING_PROGRESS_BAR_SIZE_FACTORS = { 'width': 0.3, 'height': 0.15 };
+const LOADING_PROGRESS_BAR_SIZE_FACTORS = { 'width': 0.2, 'height': 0.1 };
 const LOADING_V_SPACING_FACTOR = 0.02;
 const TILE_SPACING = 1;
 const TILE_FREE_COLOR = 'rgb(192, 255, 192)';
 const TILE_BLOCKING_COLOR = 'rgb(255, 192, 192)';
 const CREATURE_SIZE_FACTOR = 0.75;
+const CREATURE_DIR_TRIANGLE_ANGLE = Math.PI / 4;
 const CREATURE_COLOR = 'rgb(0, 0, 255)';
-const CREATURE_NAME_FONT = '16px Arial';
+const CREATURE_NAME_FONT = '12px Arial';
 const CREATURE_NAME_COLOR = 'black';
-const CREATURE_NAME_OFFSET_Y = 15;
+const CREATURE_HP_BAR_BG_COLOR = 'rgb(128, 128, 128)';
+const CREATURE_HP_BAR_FILL_COLOR = 'rgb(255, 0, 0)';
+const CREATURE_HP_BAR_LINE_WIDTH = 2;
+const ACTION_BUTTON_SIZE_FACTOR = 0.075;
+const ACTION_BUTTON_SPACING_FACTOR = 0.15;
+const ACTION_BUTTON_Y_FACTOR = 0.9;
+const ACTION_BUTTON_BG_COLOR = 'rgb(243, 183, 0)';
+const ACTION_BUTTON_LABEL_COLOR = 'rgb(255, 255, 255)';
+const ACTION_BUTTON_LABEL_FONT_SIZE_FACTOR = 0.2;
 
 let loadingLabel = 'Initializing', loadingPercentage = 0;
 
@@ -25,13 +34,22 @@ let send = function() {};
 
 let universalTileMap = null, combatSystem = null;
 
-let creatureIDs = [], playerID = 0;
+let creatures = {};
+let playerID = 0;
 
 let tileSize = 0, creatureSize = 0;
+let mapPixelWidth = 0, mapPixelHeight = 0;
+let mapDrawX = 0, mapDrawY = 0;
+
+let actionButtons = [];
+let actionButtonSize = 0, actionButtonSpacing = 0;
+let actionButtonsPanelWidth = 0, actionButtonsPanelX = 0, actionButtonsPanelY = 0;
+let actionButtonLabelFont = null;
 
 let lastUpdateTime = 0;
 
 let leftPressed = false, rightPressed = false, upPressed = false, downPressed = false;
+let lastMovementX = 0, lastMovementY = 0;
 
 // INITIALIZATION
 document.addEventListener('DOMContentLoaded', () =>
@@ -153,11 +171,11 @@ function load(mapName)
 				loadingPercentage = 0;
 				reject();
 			}
-			if (func == Loader.loadAdvancedObjectAttributes)
+			if (func.name == 'loadAdvancedObjectAttributes')
 			{
 				loadingLabel = 'Loading map';
 			}
-			if (func == Loader.loadOTBMap)
+			if (func.name == 'bound loadOTBMap')
 			{
 				loadingLabel = 'Building map';
 			}
@@ -177,12 +195,37 @@ function initCombatSystem()
 	universalTileMap = Loader.universalTileMap;
 	combatSystem = new FoFcombat.CombatSystem(universalTileMap, '/res/scripts/');
 
+	const onCreaturePositionChangedHandler = new FoFcombat.CreaturePositionChangedCallback(onCreaturePositionChanged);
+	combatSystem.addCreatureOnPositionChangedHandler(onCreaturePositionChangedHandler);
+
+	const onCreatureHPChangedHandler = new FoFcombat.CreatureHPChangedCallback(onCreatureHPChanged);
+	combatSystem.addCreatureOnHPChangedHandler(onCreatureHPChangedHandler);
+
 	let playerCombatData = combatSystem.preparePlayerCombatData(0);
 	playerCombatData = convertCreatureCombatDataToPlainObject(playerCombatData);
 
 	send({ 'message': 'addPlayer', 'combatData': playerCombatData });
 
 	resize(); // needed to update tile and other objects sizes based on map size
+}
+
+function onCreaturePositionChanged(creatureID, position, direction)
+{
+	const creature = creatures[creatureID];
+	creature.position.x = position.x;
+	creature.position.y = position.y;
+	if (direction.x != 0 || direction.y != 0)
+	{
+		creature.direction.x = direction.x;
+		creature.direction.y = direction.y;
+	}
+}
+
+function onCreatureHPChanged(creatureID, currentHP, totalHP, changeType)
+{
+	const creature = creatures[creatureID];
+	creature.HP.current = currentHP;
+	creature.HP.total = totalHP;
 }
 
 function convertCreatureCombatDataToPlainObject(combatData)
@@ -279,20 +322,48 @@ function makeCreatureCombatDataFromPlainObject(data)
 	return combatData;
 }
 
-function addSelf(pos)
+function makeCreatureBase()
 {
+	return {
+		'id': 0,
+		'position': { 'x': 0, 'y': 0 },
+		'direction': { 'x': 0, 'y': -1 },
+		'HP': { 'current': 0, 'total': 0 }
+	};
+}
+
+function addSelf(position)
+{
+	const creature = makeCreatureBase();
+	creature.id = playerID;
+	creatures[creature.id] = creature;
+
 	combatSystem.addPlayer(playerID, 0);
-	combatSystem.setCreatureFloor(playerID, pos.z);
-	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(pos.x, pos.y));
-	creatureIDs.push(playerID);
+	combatSystem.setCreatureFloor(playerID, position.z);
+	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(position.x, position.y));
+
+	// for now not using real spells, instead making two action buttons, one for melee attack and one for ranged attack
+	actionButtons.push({
+		'spellID': 1,
+		'label': "1\nMelee\nAttack"
+	});
+	actionButtons.push({
+		'spellID': 2,
+		'label': '2\nRanged\nAttack'
+	});
+
+	resize();
 }
 
 function addCreature(creatureID, combatData, position)
 {
+	const creature = makeCreatureBase();
+	creature.id = creatureID;
+	creatures[creature.id] = creature;
+
 	combatSystem.addCreature(creatureID, makeCreatureCombatDataFromPlainObject(combatData));
 	combatSystem.setCreatureFloor(creatureID, position.z);
 	combatSystem.setCreaturePosition(creatureID, new FoFcombat.Vector2(position.x, position.y));
-	creatureIDs.push(creatureID);
 }
 
 function handleMovement()
@@ -307,7 +378,12 @@ function handleMovement()
 
 	combatSystem.setCreatureMovement(playerID, movementX, movementY);
 
-	send({ 'message': 'movement', 'movementX': movementX, 'movementY': movementY });
+	if (movementX != lastMovementX || movementY != lastMovementY)
+	{
+		send({ 'message': 'movement', 'movementX': movementX, 'movementY': movementY });
+		lastMovementX = movementX;
+		lastMovementY = movementY;
+	}
 }
 
 function sync(data)
@@ -316,13 +392,13 @@ function sync(data)
 	for (let i in data)
 	{
 		const d = data[i];
-		const pos = combatSystem.getCreaturePosition(d.creatureID);
-		if (Math.abs(pos.x - d.position.x) > halfTileSize || Math.abs(pos.y - d.position.y) > halfTileSize)
+		const creature = creatures[d.creatureID];
+		if (Math.abs(creature.position.x - d.position.x) > halfTileSize || Math.abs(creature.position.y - d.position.y) > halfTileSize)
 		{
 			console.log('Synchronizing position for %s', d.creatureID);
-			pos.x = d.position.x;
-			pos.y = d.position.y;
-			combatSystem.setCreaturePosition(d.creatureID, pos);
+			creature.position.x = d.position.x;
+			creature.position.y = d.position.y;
+			combatSystem.setCreaturePosition(d.creatureID, new FoFcombat.Vector2(creature.position.x, creature.position.y));
 			combatSystem.resetCreatureMovementDirection(d.creatureID);
 		}
 	}
@@ -401,7 +477,22 @@ function resize()
 	{
 		let mapAspect = universalTileMap.width / universalTileMap.height, canvasAspect = canvas.clientWidth / canvas.clientHeight;
 		tileSize = (mapAspect >= canvasAspect) ? (canvas.clientWidth / universalTileMap.width) : (canvas.clientHeight / universalTileMap.height);
+		mapPixelWidth = tileSize * universalTileMap.width;
+		mapPixelHeight = tileSize * universalTileMap.height;
+		mapDrawX = (canvas.clientWidth - mapPixelWidth) / 2;
+		mapDrawY = (canvas.clientHeight - mapPixelHeight) / 2;
+
 		creatureSize = tileSize * CREATURE_SIZE_FACTOR;
+	}
+
+	if (actionButtons.length)
+	{
+		actionButtonSize = mapPixelHeight * ACTION_BUTTON_SIZE_FACTOR;
+		actionButtonSpacing = actionButtonSize * ACTION_BUTTON_SPACING_FACTOR;
+		actionButtonsPanelWidth = actionButtons.length * (actionButtonSize + actionButtonSpacing) - actionButtonSpacing;
+		actionButtonsPanelX = mapDrawX + (mapPixelWidth - actionButtonsPanelWidth) / 2;
+		actionButtonsPanelY = mapDrawY + mapPixelHeight * ACTION_BUTTON_Y_FACTOR;
+		actionButtonLabelFont = 'bold ' + Math.round(actionButtonSize * ACTION_BUTTON_LABEL_FONT_SIZE_FACTOR) + 'px Arial';
 	}
 }
 
@@ -412,6 +503,7 @@ function draw()
 	drawLoading();
 	drawMap();
 	drawCreatures();
+	drawUI();
 }
 
 function drawLoading()
@@ -428,9 +520,9 @@ function drawLoading()
 	progressBarSize.width = canvas.width * LOADING_PROGRESS_BAR_SIZE_FACTORS.width;
 	progressBarSize.height = progressBarSize.width * LOADING_PROGRESS_BAR_SIZE_FACTORS.height;
 	
-	let vSpacing = canvas.width * LOADING_V_SPACING_FACTOR;
+	const vSpacing = canvas.width * LOADING_V_SPACING_FACTOR;
 
-	let totalLoadingHeight = textMetrics.height + vSpacing + progressBarSize.height;
+	const totalLoadingHeight = textMetrics.height + vSpacing + progressBarSize.height;
 
 	let x = (canvas.width - textMetrics.width) / 2, y = (canvas.height - totalLoadingHeight) / 2;
 	canvas2d.fillText(loadingLabel, x, y);
@@ -448,14 +540,14 @@ function drawMap()
 {
 	if (!universalTileMap) return;
 
-	let tileState = 0;
 	for (let tileX = 0; tileX < universalTileMap.width; ++tileX)
 	{
 		for (let tileY = 0; tileY < universalTileMap.height; ++tileY)
 		{
 			const tile = universalTileMap.getTile(tileX, tileY, FoFcombat.UniversalTileMap.GROUND_FLOOR); // for now always drawing only ground floor
 			canvas2d.fillStyle = tile.isBlocking ? TILE_BLOCKING_COLOR : TILE_FREE_COLOR;
-			canvas2d.fillRect(tileX * tileSize + TILE_SPACING, tileY * tileSize + TILE_SPACING, tileSize - TILE_SPACING * 2, tileSize - TILE_SPACING * 2);
+			canvas2d.fillRect(mapDrawX + tileX * tileSize + TILE_SPACING, mapDrawY + tileY * tileSize + TILE_SPACING,
+			                  tileSize - TILE_SPACING * 2, tileSize - TILE_SPACING * 2);
 		}
 	}
 }
@@ -464,26 +556,90 @@ function drawCreatures()
 {
 	if (!combatSystem) return;
 
-	let tileSizeFactor = tileSize / FoFcombat.FoFSprite.SIZE;
-	canvas2d.fillStyle = CREATURE_COLOR;
-	for (let i in creatureIDs)
+	const tileSizeFactor = tileSize / FoFcombat.FoFSprite.SIZE;
+	const halfTileSize = tileSize / 2, creatureHalfSize = creatureSize / 2;
+	const plusAngleSin = Math.sin(CREATURE_DIR_TRIANGLE_ANGLE), plusAngleCos = Math.cos(CREATURE_DIR_TRIANGLE_ANGLE);
+	const minusAngleSin = Math.sin(-CREATURE_DIR_TRIANGLE_ANGLE), minusAngleCos = Math.cos(-CREATURE_DIR_TRIANGLE_ANGLE);
+	canvas2d.fillStyle = canvas2d.strokeStyle = CREATURE_COLOR;
+	canvas2d.font = CREATURE_NAME_FONT;
+	const nameTextMetrics = canvas2d.measureText('A');
+	const nameTextHeight = nameTextMetrics.actualBoundingBoxAscent + nameTextMetrics.actualBoundingBoxDescent;
+
+	for (let id in creatures)
 	{
-		const creatureID = creatureIDs[i];
-		const pos = combatSystem.getCreaturePosition(creatureID);
-		let x = pos.x * tileSizeFactor, y = pos.y * tileSizeFactor;
+		const creature = creatures[id];
+
+		// drawing creature circle
+		const x = mapDrawX + creature.position.x * tileSizeFactor, y = mapDrawY + creature.position.y * tileSizeFactor;
 		canvas2d.beginPath();
-		canvas2d.arc(x, y, creatureSize / 2, 0, Math.PI * 2);
+		canvas2d.arc(x, y, creatureHalfSize, 0, Math.PI * 2);
+		canvas2d.fill();
+
+		// drawing direction triangle
+		canvas2d.beginPath();
+		const tipX = x + creature.direction.x * halfTileSize, tipY = y + creature.direction.y * halfTileSize;
+		canvas2d.moveTo(tipX, tipY);
+		const side1X = x + (creature.direction.x * minusAngleCos - creature.direction.y * minusAngleSin) * creatureHalfSize;
+		const side1Y = y + (creature.direction.x * minusAngleSin + creature.direction.y * minusAngleCos) * creatureHalfSize;
+		canvas2d.lineTo(side1X, side1Y);
+		const side2X = x + (creature.direction.x * plusAngleCos - creature.direction.y * plusAngleSin) * creatureHalfSize;
+		const side2Y = y + (creature.direction.x * plusAngleSin + creature.direction.y * plusAngleCos) * creatureHalfSize;
+		canvas2d.lineTo(side2X, side2Y);
+		canvas2d.closePath();
 		canvas2d.fill();
 	}
 	
-	canvas2d.font = CREATURE_NAME_FONT;
+	// drawing creature name and HP bar
 	canvas2d.fillStyle = CREATURE_NAME_COLOR;
-	for (let i in creatureIDs)
+	canvas2d.lineWidth = CREATURE_HP_BAR_LINE_WIDTH;
+	for (let id in creatures)
 	{
-		const creatureID = creatureIDs[i];
-		const pos = combatSystem.getCreaturePosition(creatureID);
-		let x = pos.x * tileSizeFactor, y = pos.y * tileSizeFactor;
-		let nameText = creatureID + (creatureID == playerID ? ' (me)' : '');
-		canvas2d.fillText(nameText, x - canvas2d.measureText(nameText).width / 2, y - CREATURE_NAME_OFFSET_Y);
+		const creature = creatures[id];
+		const x = mapDrawX + creature.position.x * tileSizeFactor, y = mapDrawY + creature.position.y * tileSizeFactor;
+		const nameText = id + (id == playerID ? ' (me)' : '');
+		canvas2d.fillText(nameText, x - canvas2d.measureText(nameText).width / 2, y + halfTileSize + nameTextHeight);
+
+		let hpBarStartX = x - halfTileSize, hpBarEndX = hpBarStartX + tileSize, hpBarY = y - halfTileSize - CREATURE_HP_BAR_LINE_WIDTH;
+		canvas2d.strokeStyle = CREATURE_HP_BAR_BG_COLOR;
+		canvas2d.beginPath();
+		canvas2d.moveTo(hpBarStartX, hpBarY);
+		canvas2d.lineTo(hpBarEndX, hpBarY);
+		canvas2d.stroke();
+		hpBarEndX = hpBarStartX + tileSize * (creature.HP.current / creature.HP.total);
+		canvas2d.strokeStyle = CREATURE_HP_BAR_FILL_COLOR;
+		canvas2d.beginPath();
+		canvas2d.moveTo(hpBarStartX, hpBarY);
+		canvas2d.lineTo(hpBarEndX, hpBarY);
+		canvas2d.stroke();
+	}
+}
+
+function drawUI()
+{
+	if (actionButtons.length == 0) return;
+
+	canvas2d.font = actionButtonLabelFont;
+	const labelTextMetrics = canvas2d.measureText('A');
+	const labelTextHeight = (labelTextMetrics.actualBoundingBoxAscent + labelTextMetrics.actualBoundingBoxDescent);
+	const labelTextLineHeight = labelTextHeight * 0.5;
+
+	for (let i in actionButtons)
+	{
+		canvas2d.fillStyle = ACTION_BUTTON_BG_COLOR;
+		const button = actionButtons[i];
+		const buttonX = actionButtonsPanelX + i * (actionButtonSize + actionButtonSpacing);
+		canvas2d.fillRect(buttonX, actionButtonsPanelY, actionButtonSize, actionButtonSize);
+
+		canvas2d.fillStyle = ACTION_BUTTON_LABEL_COLOR;
+		const buttonCenterX = buttonX + actionButtonSize / 2;
+		const labelParts = button.label.split('\n');
+		let labelY = actionButtonsPanelY + labelTextHeight + labelTextLineHeight
+		           + (actionButtonSize - labelParts.length * (labelTextHeight + labelTextLineHeight)- labelTextLineHeight) / 2;
+		for (let j = 0; j < labelParts.length; ++j)
+		{
+			const part = labelParts[j];
+			canvas2d.fillText(part, buttonCenterX - canvas2d.measureText(part).width / 2, labelY);
+			labelY += labelTextHeight + labelTextLineHeight;
+		}
 	}
 }
