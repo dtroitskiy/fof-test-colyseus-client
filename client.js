@@ -22,6 +22,7 @@ const ACTION_BUTTON_SIZE_FACTOR = 0.075;
 const ACTION_BUTTON_SPACING_FACTOR = 0.15;
 const ACTION_BUTTON_Y_FACTOR = 0.9;
 const ACTION_BUTTON_BG_COLOR = 'rgb(243, 183, 0)';
+const ACTION_BUTTON_BG_HL_COLOR = 'rgb(255, 200, 33)';
 const ACTION_BUTTON_LABEL_COLOR = 'rgb(255, 255, 255)';
 const ACTION_BUTTON_LABEL_FONT_SIZE_FACTOR = 0.2;
 
@@ -45,6 +46,7 @@ let actionButtons = [];
 let actionButtonSize = 0, actionButtonSpacing = 0;
 let actionButtonsPanelWidth = 0, actionButtonsPanelX = 0, actionButtonsPanelY = 0;
 let actionButtonLabelFont = null;
+let selectedActionButton = null;
 
 let lastUpdateTime = 0;
 
@@ -345,10 +347,12 @@ function addSelf(position)
 	// for now not using real spells, instead making two action buttons, one for melee attack and one for ranged attack
 	actionButtons.push({
 		'spellID': 1,
+		'spellStrID': 'melee_attack',
 		'label': "1\nMelee\nAttack"
 	});
 	actionButtons.push({
-		'spellID': 2,
+		'spellID': 1,
+		'spellStrID': 'ranged_attack',
 		'label': '2\nRanged\nAttack'
 	});
 
@@ -384,6 +388,12 @@ function handleMovement()
 		lastMovementX = movementX;
 		lastMovementY = movementY;
 	}
+}
+
+function handlePlayerUsedSpell(position)
+{
+	combatSystem.setCreatureUsedSpell(playerID, selectedActionButton.spellID, new FoFcombat.Vector2(position.x, position.y));
+	send({ 'message': 'spellUsed', 'spellID': selectedActionButton.spellID, 'position': position });
 }
 
 function sync(data)
@@ -456,6 +466,38 @@ document.addEventListener('keyup', function(event)
 	else if (event.code == "ArrowDown" || event.code == "KeyS")
 	{
 		downPressed = false;
+	}
+
+	const numKey = parseInt(event.key);
+	if (!isNaN(numKey) && actionButtons.length > numKey - 1)
+	{
+		selectedActionButton = actionButtons[numKey - 1];
+	}
+});
+
+document.addEventListener('mouseup', function(event)
+{
+	if (event.button != 0) return;
+
+	let actionButtonSelected = false;
+	for (let i = 0; i < actionButtons.length; ++i)
+	{
+		const buttonX = actionButtonsPanelX + i * (actionButtonSize + actionButtonSpacing);
+		if (event.x >= buttonX && event.x <= buttonX + actionButtonSize &&
+		    event.y >= actionButtonsPanelY && event.y <= actionButtonsPanelY + actionButtonSize)
+		{
+			selectedActionButton = actionButtons[i];
+			actionButtonSelected = true;
+			break;
+		}
+	}
+	// if action button wasn't clicked, then it's click on the map
+	// and we must handle spell usage if it's already selected
+	if (!actionButtonSelected && selectedActionButton)
+	{
+		const tileSizeFactor = tileSize / FoFcombat.FoFSprite.SIZE;
+		const pos = { 'x': (event.x - mapDrawX) / tileSizeFactor, 'y': (event.y - mapDrawY) / tileSizeFactor };
+		handlePlayerUsedSpell(pos);
 	}
 });
 
@@ -623,16 +665,16 @@ function drawUI()
 	const labelTextHeight = (labelTextMetrics.actualBoundingBoxAscent + labelTextMetrics.actualBoundingBoxDescent);
 	const labelTextLineHeight = labelTextHeight * 0.5;
 
-	for (let i in actionButtons)
+	for (let i = 0; i < actionButtons.length; ++i)
 	{
-		canvas2d.fillStyle = ACTION_BUTTON_BG_COLOR;
 		const button = actionButtons[i];
 		const buttonX = actionButtonsPanelX + i * (actionButtonSize + actionButtonSpacing);
+		canvas2d.fillStyle = (button == selectedActionButton ? ACTION_BUTTON_BG_HL_COLOR : ACTION_BUTTON_BG_COLOR);
 		canvas2d.fillRect(buttonX, actionButtonsPanelY, actionButtonSize, actionButtonSize);
 
-		canvas2d.fillStyle = ACTION_BUTTON_LABEL_COLOR;
 		const buttonCenterX = buttonX + actionButtonSize / 2;
 		const labelParts = button.label.split('\n');
+		canvas2d.fillStyle = ACTION_BUTTON_LABEL_COLOR;
 		let labelY = actionButtonsPanelY + labelTextHeight + labelTextLineHeight
 		           + (actionButtonSize - labelParts.length * (labelTextHeight + labelTextLineHeight)- labelTextLineHeight) / 2;
 		for (let j = 0; j < labelParts.length; ++j)
