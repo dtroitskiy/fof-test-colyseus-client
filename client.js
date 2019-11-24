@@ -18,6 +18,8 @@ const CREATURE_NAME_COLOR = 'black';
 const CREATURE_HP_BAR_BG_COLOR = 'rgb(128, 128, 128)';
 const CREATURE_HP_BAR_FILL_COLOR = 'rgb(255, 0, 0)';
 const CREATURE_HP_BAR_LINE_WIDTH = 2;
+const PROJECTILE_SIZE_FACTOR = 0.1;
+const PROJECTILE_COLOR = 'rgb(51, 17, 0)';
 const ACTION_BUTTON_SIZE_FACTOR = 0.075;
 const ACTION_BUTTON_SPACING_FACTOR = 0.15;
 const ACTION_BUTTON_Y_FACTOR = 0.9;
@@ -25,6 +27,13 @@ const ACTION_BUTTON_BG_COLOR = 'rgb(243, 183, 0)';
 const ACTION_BUTTON_BG_HL_COLOR = 'rgb(255, 200, 33)';
 const ACTION_BUTTON_LABEL_COLOR = 'rgb(255, 255, 255)';
 const ACTION_BUTTON_LABEL_FONT_SIZE_FACTOR = 0.2;
+const DEATH_MESSAGE_TEXT_COLOR = 'rgb(200, 0, 0)';
+const DEATH_MESSAGE_TITLE_FONT = '36px Arial';
+const DEATH_MESSAGE_HINT_FONT = '18px Arial';
+const DEATH_MESSAGE_FRAME_COLOR = 'rgb(200, 0, 0)';
+const DEATH_MESSAGE_BG_COLOR = 'rgb(255, 255, 255)';
+const DEATH_MESSAGE_FRAME_WIDTH_FACTOR = 0.01;
+const DEATH_MESSAGE_SPACING_FACTOR = 1.0;
 
 let loadingLabel = 'Initializing', loadingPercentage = 0;
 
@@ -37,8 +46,10 @@ let universalTileMap = null, combatSystem = null;
 
 let creatures = {};
 let playerID = 0;
+let isDead = false;
+let projectiles = {};
 
-let tileSize = 0, creatureSize = 0;
+let tileSize = 0, creatureSize = 0, projectileSize = 0;
 let mapPixelWidth = 0, mapPixelHeight = 0;
 let mapDrawX = 0, mapDrawY = 0;
 
@@ -132,20 +143,44 @@ function handleMessage(data)
 		break;
 		case 'addSelf':
 			loadingLabel = null;
-			addSelf(data.position);
+			addSelf(data.creature);
 		break;
 		case 'addCreature':
-			addCreature(data.creatureID, data.combatData, data.position);
+			addCreature(data.creature);
 		break;
 		case 'addCreatures':
-			for (let i in data.creaturesData)
+			for (let id in data.creatures)
 			{
-				const cd = data.creaturesData[i];
-				addCreature(cd.creatureID, cd.combatData, cd.position);
+				addCreature(data.creatures[id]);
 			}
+		break;
+		case 'removeCreature':
+			delete creatures[data.creatureID];
+			combatSystem.removeCreature(data.creatureID);
 		break;
 		case 'movement':
 			combatSystem.setCreatureMovement(data.creatureID, data.movementX, data.movementY);
+		break;
+		case 'swapWeapon':
+			combatSystem.swapCreatureWeapon(data.creatureID);
+		break;
+		case 'spellUsed':
+			combatSystem.setCreatureUsedSpell(data.creatureID, data.spellID, new FoFcombat.Vector2(data.position.x, data.position.y));
+		break;
+		case 'HPChanged':
+			console.log('HP changed!');
+			const creature = creatures[data.creatureID];
+			if (creature)
+			{
+				creature.HP.current = data.currentHP;
+				creature.HP.total = data.totalHP;
+				combatSystem.setCreatureHP(data.creatureID, data.currentHP, data.totalHP);
+			}
+		break;
+		case 'creatureKilled':
+			delete creatures[data.killedCreatureID];
+			combatSystem.removeCreature(data.killedCreatureID);
+			isDead = (data.killedCreatureID == playerID);
 		break;
 		case 'sync':
 			sync(data.syncData);
@@ -196,12 +231,28 @@ function initCombatSystem()
 {
 	universalTileMap = Loader.universalTileMap;
 	combatSystem = new FoFcombat.CombatSystem(universalTileMap, '/res/scripts/');
+	if (CONNECT) combatSystem.setSlave(true);
 
 	const onCreaturePositionChangedHandler = new FoFcombat.CreaturePositionChangedCallback(onCreaturePositionChanged);
 	combatSystem.addCreatureOnPositionChangedHandler(onCreaturePositionChangedHandler);
 
-	const onCreatureHPChangedHandler = new FoFcombat.CreatureHPChangedCallback(onCreatureHPChanged);
-	combatSystem.addCreatureOnHPChangedHandler(onCreatureHPChangedHandler);
+	if (!CONNECT)
+	{
+		const onCreatureHPChangedHandler = new FoFcombat.CreatureHPChangedCallback(onCreatureHPChanged);
+		combatSystem.addCreatureOnHPChangedHandler(onCreatureHPChangedHandler);
+	}
+
+	const onCreatureAttackHandler = new FoFcombat.CreatureAttackCallback(onCreatureAttack);
+	combatSystem.addCreatureOnAttackHandler(onCreatureAttackHandler);
+
+	const onProjectileAddedHandler = new FoFcombat.ProjectileAddedCallback(onProjectileAdded);
+	combatSystem.addProjectileOnAddedHandler(onProjectileAddedHandler);
+
+	const onProjectilePositionChangedHandler = new FoFcombat.ProjectilePositionChangedCallback(onProjectilePositionChanged);
+	combatSystem.addProjectileOnPositionChangedHandler(onProjectilePositionChangedHandler);
+
+	const onProjectileRemovedHandler = new FoFcombat.ProjectileRemovedCallback(onProjectileRemoved);
+	combatSystem.addProjectileOnRemovedHandler(onProjectileRemovedHandler);
 
 	let playerCombatData = combatSystem.preparePlayerCombatData(0);
 	playerCombatData = convertCreatureCombatDataToPlainObject(playerCombatData);
@@ -228,6 +279,33 @@ function onCreatureHPChanged(creatureID, currentHP, totalHP, changeType)
 	const creature = creatures[creatureID];
 	creature.HP.current = currentHP;
 	creature.HP.total = totalHP;
+}
+
+function onCreatureAttack(creatureID, animSetName, direction)
+{
+	const creature = creatures[creatureID];
+	creature.direction.x = direction.x;
+	creature.direction.y = direction.y;
+}
+
+function onProjectileAdded(projectileID, projectileObjectID, position, floor, direction, length)
+{
+	projectiles[projectileID] = {
+		'id': projectileID,
+		'position': { 'x': position.x, 'y': position.y }
+	};
+}
+
+function onProjectilePositionChanged(projectileID, position)
+{
+	const projectile = projectiles[projectileID];
+	projectile.position.x = position.x;
+	projectile.position.y = position.y;
+}
+
+function onProjectileRemoved(projectileID)
+{
+	delete projectiles[projectileID];
 }
 
 function convertCreatureCombatDataToPlainObject(combatData)
@@ -324,25 +402,15 @@ function makeCreatureCombatDataFromPlainObject(data)
 	return combatData;
 }
 
-function makeCreatureBase()
+function addSelf(creature)
 {
-	return {
-		'id': 0,
-		'position': { 'x': 0, 'y': 0 },
-		'direction': { 'x': 0, 'y': -1 },
-		'HP': { 'current': 0, 'total': 0 }
-	};
-}
-
-function addSelf(position)
-{
-	const creature = makeCreatureBase();
-	creature.id = playerID;
+	delete creature.combatData;// we don't need this field locally
+	creature.direction = { 'x': 0, 'y': -1 };
 	creatures[creature.id] = creature;
 
 	combatSystem.addPlayer(playerID, 0);
-	combatSystem.setCreatureFloor(playerID, position.z);
-	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(position.x, position.y));
+	combatSystem.setCreatureFloor(playerID, creature.position.z);
+	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(creature.position.x, creature.position.y));
 
 	// for now not using real spells, instead making two action buttons, one for melee attack and one for ranged attack
 	actionButtons.push({
@@ -359,15 +427,16 @@ function addSelf(position)
 	resize();
 }
 
-function addCreature(creatureID, combatData, position)
+function addCreature(creature)
 {
-	const creature = makeCreatureBase();
-	creature.id = creatureID;
+	const combatData = makeCreatureCombatDataFromPlainObject(creature.combatData);
+	delete creature.combatData; // we don't need this field anymore
+	creature.direction = { 'x': 0, 'y': -1 };
 	creatures[creature.id] = creature;
 
-	combatSystem.addCreature(creatureID, makeCreatureCombatDataFromPlainObject(combatData));
-	combatSystem.setCreatureFloor(creatureID, position.z);
-	combatSystem.setCreaturePosition(creatureID, new FoFcombat.Vector2(position.x, position.y));
+	combatSystem.addCreature(creature.id, combatData);
+	combatSystem.setCreatureFloor(creature.id, creature.position.z);
+	combatSystem.setCreaturePosition(creature.id, new FoFcombat.Vector2(creature.position.x, creature.position.y));
 }
 
 function handleMovement()
@@ -392,6 +461,16 @@ function handleMovement()
 
 function handlePlayerUsedSpell(position)
 {
+	// because we're using artificial melee & ranged attack buttons
+	// we manually verify selected button and currently equipped weapon (assuming that default melee weapon - sword - has ID 1)
+	const weaponID = combatSystem.getCreatureCurrentWeaponID(playerID);
+	if ((selectedActionButton.spellStrID == 'melee_attack' && weaponID != 1) ||
+	    (selectedActionButton.spellStrID == 'ranged_attack' && weaponID == 1))
+	{
+		combatSystem.swapCreatureWeapon(playerID);
+		send({ 'message': 'swapWeapon' });
+	}
+
 	combatSystem.setCreatureUsedSpell(playerID, selectedActionButton.spellID, new FoFcombat.Vector2(position.x, position.y));
 	send({ 'message': 'spellUsed', 'spellID': selectedActionButton.spellID, 'position': position });
 }
@@ -431,6 +510,8 @@ function update(time)
 // INPUT
 document.addEventListener('keydown', function(event)
 {
+	if (isDead) return;
+	
 	if (event.code == "ArrowLeft" || event.code == "KeyA")
 	{
 		leftPressed = true;
@@ -451,6 +532,8 @@ document.addEventListener('keydown', function(event)
 
 document.addEventListener('keyup', function(event)
 {
+	if (isDead) return;
+	
 	if (event.code == "ArrowLeft" || event.code == "KeyA")
 	{
 		leftPressed = false;
@@ -477,6 +560,7 @@ document.addEventListener('keyup', function(event)
 
 document.addEventListener('mouseup', function(event)
 {
+	if (isDead) return;
 	if (event.button != 0) return;
 
 	let actionButtonSelected = false;
@@ -525,6 +609,7 @@ function resize()
 		mapDrawY = (canvas.clientHeight - mapPixelHeight) / 2;
 
 		creatureSize = tileSize * CREATURE_SIZE_FACTOR;
+		projectileSize = tileSize * PROJECTILE_SIZE_FACTOR;
 	}
 
 	if (actionButtons.length)
@@ -545,6 +630,7 @@ function draw()
 	drawLoading();
 	drawMap();
 	drawCreatures();
+	drawProjectiles();
 	drawUI();
 }
 
@@ -656,6 +742,22 @@ function drawCreatures()
 	}
 }
 
+function drawProjectiles()
+{
+	if (!combatSystem) return;
+
+	const tileSizeFactor = tileSize / FoFcombat.FoFSprite.SIZE;
+	canvas2d.fillStyle = PROJECTILE_COLOR;
+	for (let id in projectiles)
+	{
+		const projectile = projectiles[id];
+		const x = mapDrawX + projectile.position.x * tileSizeFactor, y = mapDrawY + projectile.position.y * tileSizeFactor;
+		canvas2d.beginPath();
+		canvas2d.arc(x, y, projectileSize, 0, Math.PI * 2);
+		canvas2d.fill();
+	}
+}
+
 function drawUI()
 {
 	if (actionButtons.length == 0) return;
@@ -683,5 +785,41 @@ function drawUI()
 			canvas2d.fillText(part, buttonCenterX - canvas2d.measureText(part).width / 2, labelY);
 			labelY += labelTextHeight + labelTextLineHeight;
 		}
+	}
+
+	if (isDead)
+	{
+		canvas2d.font = DEATH_MESSAGE_TITLE_FONT;
+		const title = "You're dead!";
+		const titleMetrics = canvas2d.measureText(title);
+		titleMetrics.height = titleMetrics.actualBoundingBoxAscent + titleMetrics.actualBoundingBoxDescent;
+
+		canvas2d.font = DEATH_MESSAGE_HINT_FONT;
+		const hint = "Reload page to restart.";
+		const hintMetrics = canvas2d.measureText(hint);
+		hintMetrics.height = hintMetrics.actualBoundingBoxAscent + hintMetrics.actualBoundingBoxDescent;
+
+		const spacing = titleMetrics.height * DEATH_MESSAGE_SPACING_FACTOR;
+		const boxWidth = Math.max(titleMetrics.width, hintMetrics.width) + spacing * 2;
+		const boxHeight = titleMetrics.height + hintMetrics.height + spacing * 2;
+
+		let x = (canvas.width - boxWidth) / 2, y = (canvas.height - boxHeight) / 2;
+		canvas2d.fillStyle = DEATH_MESSAGE_FRAME_COLOR;
+		canvas2d.fillRect(x, y, boxWidth, boxHeight);
+		
+		const frameThickness = boxWidth * DEATH_MESSAGE_FRAME_WIDTH_FACTOR;
+		canvas2d.fillStyle = DEATH_MESSAGE_BG_COLOR;
+		canvas2d.fillRect(x + frameThickness, y + frameThickness, boxWidth - frameThickness * 2, boxHeight - frameThickness * 2);
+
+		x = (canvas.width - titleMetrics.width) / 2;
+		y = canvas.height / 2;
+		canvas2d.fillStyle = DEATH_MESSAGE_TEXT_COLOR;
+		canvas2d.font = DEATH_MESSAGE_TITLE_FONT;
+		canvas2d.fillText(title, x, y);
+
+		x = (canvas.width - hintMetrics.width) / 2;
+		y += hintMetrics.height * 1.5;
+		canvas2d.font = DEATH_MESSAGE_HINT_FONT;
+		canvas2d.fillText(hint, x, y);
 	}
 }
