@@ -2,12 +2,6 @@ const fs = require('fs');
 const http = require('http');
 const port = process.env.PORT || 8000;
 
-// tried setup HTTPS sever, but not using for now
-/*const options = {
-  key: fs.readFileSync('ssl/key.pem'),
-  cert: fs.readFileSync('ssl/cert.pem')
-};*/
-
 http.createServer(function(req, res)
 {
 	let url = '.' + (req.url == '/' ? '/index.html' : req.url);
