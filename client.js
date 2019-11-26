@@ -168,7 +168,6 @@ function handleMessage(data)
 			combatSystem.setCreatureUsedSpell(data.creatureID, data.spellID, new FoFcombat.Vector2(data.position.x, data.position.y));
 		break;
 		case 'HPChanged':
-			console.log('HP changed!');
 			const creature = creatures[data.creatureID];
 			if (creature)
 			{
