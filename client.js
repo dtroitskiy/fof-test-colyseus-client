@@ -39,7 +39,7 @@ let loadingLabel = 'Initializing', loadingPercentage = 0;
 
 let canvas = null, canvas2d = null;
 
-let connected = false;
+let isConnected = false;
 let send = function() {};
 
 let universalTileMap = null, combatSystem = null;
@@ -112,6 +112,7 @@ function connect()
 	client.joinOrCreate('test').then(room =>
 	{
 		console.log('Joined room %s', room.name);
+		isConnected = true;
 
 		playerID = room.sessionId;
 		send = room.send.bind(room);
@@ -120,6 +121,7 @@ function connect()
 		room.onLeave(() =>
 		{
 		  console.log('Left room %s', room.name);
+		  isConnected = false;
 		});
 	}).catch(e =>
 	{
@@ -164,17 +166,14 @@ function handleMessage(data)
 		case 'swapWeapon':
 			combatSystem.swapCreatureWeapon(data.creatureID);
 		break;
+		case 'swapAmmo':
+			combatSystem.swapCreatureAmmo(data.creatureID);
+		break;
 		case 'spellUsed':
 			combatSystem.setCreatureUsedSpell(data.creatureID, data.spellID, new FoFcombat.Vector2(data.position.x, data.position.y));
 		break;
-		case 'HPChanged':
-			const creature = creatures[data.creatureID];
-			if (creature)
-			{
-				creature.HP.current = data.currentHP;
-				creature.HP.total = data.totalHP;
-				combatSystem.setCreatureHP(data.creatureID, data.currentHP, data.totalHP);
-			}
+		case 'abilityChanged':
+			handleAbilityChanged(data);
 		break;
 		case 'creatureKilled':
 			delete creatures[data.killedCreatureID];
@@ -403,7 +402,7 @@ function makeCreatureCombatDataFromPlainObject(data)
 
 function addSelf(creature)
 {
-	delete creature.combatData;// we don't need this field locally
+	delete creature.combatData; // we don't need this field locally
 	creature.direction = { 'x': 0, 'y': -1 };
 	creatures[creature.id] = creature;
 
@@ -438,6 +437,20 @@ function addCreature(creature)
 	combatSystem.setCreaturePosition(creature.id, new FoFcombat.Vector2(creature.position.x, creature.position.y));
 }
 
+function handleAbilityChanged(data)
+{
+	const creature = creatures[data.creatureID];
+	if (creature)
+	{
+		if (data.HP)
+		{
+			creature.HP.current = data.HP.current;
+			creature.HP.total = data.HP.total;
+			combatSystem.setCreatureHP(data.creatureID, data.HP.current, data.HP.total);
+		}
+	}
+}
+
 function handleMovement()
 {
 	if (!combatSystem) return;
@@ -448,11 +461,12 @@ function handleMovement()
 	if (upPressed) movementY -= 1;
 	if (downPressed) movementY += 1;
 
-	combatSystem.setCreatureMovement(playerID, movementX, movementY);
-
 	if (movementX != lastMovementX || movementY != lastMovementY)
 	{
+		combatSystem.setCreatureMovement(playerID, movementX, movementY);
+
 		send({ 'message': 'movement', 'movementX': movementX, 'movementY': movementY });
+		
 		lastMovementX = movementX;
 		lastMovementY = movementY;
 	}
@@ -509,7 +523,7 @@ function update(time)
 // INPUT
 document.addEventListener('keydown', function(event)
 {
-	if (isDead) return;
+	if (!isConnected || isDead) return;
 	
 	if (event.code == "ArrowLeft" || event.code == "KeyA")
 	{
@@ -531,7 +545,7 @@ document.addEventListener('keydown', function(event)
 
 document.addEventListener('keyup', function(event)
 {
-	if (isDead) return;
+	if (!isConnected || isDead) return;
 	
 	if (event.code == "ArrowLeft" || event.code == "KeyA")
 	{
@@ -559,7 +573,7 @@ document.addEventListener('keyup', function(event)
 
 document.addEventListener('mouseup', function(event)
 {
-	if (isDead) return;
+	if (!isConnected || isDead) return;
 	if (event.button != 0) return;
 
 	let actionButtonSelected = false;
@@ -786,15 +800,17 @@ function drawUI()
 		}
 	}
 
-	if (isDead)
+	if (!isConnected || isDead)
 	{
 		canvas2d.font = DEATH_MESSAGE_TITLE_FONT;
-		const title = "You're dead!";
+		let title = '';
+		if (isDead) title = "You're dead!";
+		else if (!isConnected) title = "You're disconnected!";
 		const titleMetrics = canvas2d.measureText(title);
 		titleMetrics.height = titleMetrics.actualBoundingBoxAscent + titleMetrics.actualBoundingBoxDescent;
 
 		canvas2d.font = DEATH_MESSAGE_HINT_FONT;
-		const hint = "Reload page to restart.";
+		const hint = 'Reload page to restart.';
 		const hintMetrics = canvas2d.measureText(hint);
 		hintMetrics.height = hintMetrics.actualBoundingBoxAscent + hintMetrics.actualBoundingBoxDescent;
 
