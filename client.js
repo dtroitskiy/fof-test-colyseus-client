@@ -34,6 +34,12 @@ const DEATH_MESSAGE_FRAME_COLOR = 'rgb(200, 0, 0)';
 const DEATH_MESSAGE_BG_COLOR = 'rgb(255, 255, 255)';
 const DEATH_MESSAGE_FRAME_WIDTH_FACTOR = 0.01;
 const DEATH_MESSAGE_SPACING_FACTOR = 1.0;
+const BLOOD_EFFECT_COLOR = 'rgb(255, 0, 0)';
+const BLOOD_EFFECT_CHARACTER = '*';
+const BLOOD_EFFECT_FONT = 'Arial';
+const BLOOD_EFFECT_MIN_FONT_SIZE_FACTOR = 1;
+const BLOOD_EFFECT_MAX_FONT_SIZE_FACTOR = 4;
+const BLOOD_EFFECT_TIME = 0.25;
 
 let loadingLabel = 'Initializing', loadingPercentage = 0;
 
@@ -48,6 +54,7 @@ let creatures = {};
 let playerID = 0;
 let isDead = false;
 let projectiles = {};
+let effects = {};
 
 let tileSize = 0, creatureSize = 0, projectileSize = 0;
 let mapPixelWidth = 0, mapPixelHeight = 0;
@@ -179,6 +186,9 @@ function handleMessage(data)
 			delete creatures[data.killedCreatureID];
 			combatSystem.removeCreature(data.killedCreatureID);
 			isDead = (data.killedCreatureID == playerID);
+		break;
+		case 'effectRequested':
+			handleEffectPlayRequested(data);
 		break;
 		case 'sync':
 			sync(data.syncData);
@@ -451,6 +461,18 @@ function handleAbilityChanged(data)
 	}
 }
 
+function handleEffectPlayRequested(data)
+{
+	// here we imitate handling blood effect
+	if (data.effectObjectID >= 5 && data.effectObjectID <= 14)
+	{
+		effects[data.effectID] = {
+			'position': data.position,
+			'time': BLOOD_EFFECT_TIME
+		};
+	}
+}
+
 function handleMovement()
 {
 	if (!combatSystem) return;
@@ -514,10 +536,25 @@ function update(time)
 	handleMovement();
 	
 	if (combatSystem) combatSystem.update(dt);
+
+	updateEffects(dt);
 	
 	draw();
 	
 	requestAnimationFrame(update);
+}
+
+function updateEffects(dt)
+{
+	for (let id in effects)
+	{
+		const effect = effects[id];
+		effect.time -= dt;
+		if (effect.time <= 0)
+		{
+			delete effects[id];
+		}
+	}
 }
 
 // INPUT
@@ -644,6 +681,7 @@ function draw()
 	drawMap();
 	drawCreatures();
 	drawProjectiles();
+	drawEffects();
 	drawUI();
 }
 
@@ -768,6 +806,30 @@ function drawProjectiles()
 		canvas2d.beginPath();
 		canvas2d.arc(x, y, projectileSize, 0, Math.PI * 2);
 		canvas2d.fill();
+	}
+}
+
+function drawEffects()
+{
+	if (!combatSystem) return;
+
+	const tileSizeFactor = tileSize / FoFcombat.FoFSprite.SIZE;
+	canvas2d.fillStyle = BLOOD_EFFECT_COLOR;
+	for (let id in effects)
+	{
+		const effect = effects[id];
+		const x = mapDrawX + effect.position.x * tileSizeFactor, y = mapDrawY + effect.position.y * tileSizeFactor;
+		const effectTimeFactor = (1 - effect.time / BLOOD_EFFECT_TIME);
+		const fontSize = tileSize * (BLOOD_EFFECT_MIN_FONT_SIZE_FACTOR + (BLOOD_EFFECT_MAX_FONT_SIZE_FACTOR
+		               - BLOOD_EFFECT_MIN_FONT_SIZE_FACTOR) * effectTimeFactor);
+		canvas2d.font = fontSize + 'px ' + BLOOD_EFFECT_FONT;
+		const textMetrics = canvas2d.measureText(BLOOD_EFFECT_CHARACTER);
+		textMetrics.height = textMetrics.actualBoundingBoxAscent + textMetrics.actualBoundingBoxDescent;
+		canvas2d.save();
+		canvas2d.translate(x, y);
+		canvas2d.rotate(Math.PI * effectTimeFactor);
+		canvas2d.fillText(BLOOD_EFFECT_CHARACTER, -textMetrics.width / 2, textMetrics.height * 0.8);
+		canvas2d.restore();
 	}
 }
 
