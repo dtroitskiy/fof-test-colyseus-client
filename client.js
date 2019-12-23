@@ -46,11 +46,13 @@ let loadingLabel = 'Initializing', loadingPercentage = 0;
 let canvas = null, canvas2d = null;
 
 let isConnected = false;
+let state = null;
 let send = function() {};
 
 let universalTileMap = null, combatSystem = null;
 
 let creatures = {};
+let pendingCreaturesToAdd = [];
 let playerID = 0;
 let isDead = false;
 let projectiles = {};
@@ -120,10 +122,42 @@ function connect()
 	{
 		console.log('Joined room %s', room.name);
 		isConnected = true;
-
 		playerID = room.sessionId;
+		
+		state = room.state;
 		send = room.send.bind(room);
+		
 		room.onMessage(handleMessage);
+
+		state.creatures.onAdd = (creature, id) =>
+		{
+			if (id == playerID)
+			{
+				loadingLabel = null;
+				addSelf(creature);
+			}
+			else
+			{
+				if (combatSystem)
+				{
+					addCreature(creature);
+				}
+				else
+				{
+					pendingCreaturesToAdd.push(creature);
+				}
+			}
+
+			creature.movement.onChange = onCreatureMovementSync.bind(creature);
+			creature.position.onChange = onCreaturePositionSync.bind(creature);
+			creature.HP.onChange = onCreatureHPSync.bind(creature);
+		};
+
+    state.creatures.onRemove = (creature, id) =>
+		{
+			delete creatures[data.killedCreatureID];
+    	combatSystem.removeCreature(data.creatureID);
+    };
 
 		room.onLeave(() =>
 		{
@@ -150,23 +184,6 @@ function handleMessage(data)
 				loadingLabel = 'Loading error';
 			});
 		break;
-		case 'addSelf':
-			loadingLabel = null;
-			addSelf(data.creature);
-		break;
-		case 'addCreature':
-			addCreature(data.creature);
-		break;
-		case 'addCreatures':
-			for (let id in data.creatures)
-			{
-				addCreature(data.creatures[id]);
-			}
-		break;
-		case 'removeCreature':
-			delete creatures[data.creatureID];
-			combatSystem.removeCreature(data.creatureID);
-		break;
 		case 'movement':
 			combatSystem.setCreatureMovement(data.creatureID, data.movementX, data.movementY);
 		break;
@@ -179,9 +196,6 @@ function handleMessage(data)
 		case 'spellUsed':
 			combatSystem.setCreatureUsedSpell(data.creatureID, data.spellID, new FoFcombat.Vector2(data.position.x, data.position.y));
 		break;
-		case 'abilityChanged':
-			handleAbilityChanged(data);
-		break;
 		case 'creatureKilled':
 			delete creatures[data.killedCreatureID];
 			combatSystem.removeCreature(data.killedCreatureID);
@@ -189,9 +203,6 @@ function handleMessage(data)
 		break;
 		case 'effectRequested':
 			handleEffectPlayRequested(data);
-		break;
-		case 'sync':
-			sync(data.syncData);
 		break;
 	}
 }
@@ -262,12 +273,27 @@ function initCombatSystem()
 	const onProjectileRemovedHandler = new FoFcombat.ProjectileRemovedCallback(onProjectileRemoved);
 	combatSystem.addProjectileOnRemovedHandler(onProjectileRemovedHandler);
 
+	// adding already existing creatures
+	pendingCreaturesToAdd.forEach(creature =>
+	{
+		addCreature(creature);
+	});
+	pendingCreaturesToAdd = [];
+
+	// sending message to add self
 	let playerCombatData = combatSystem.preparePlayerCombatData(0);
 	playerCombatData = convertCreatureCombatDataToPlainObject(playerCombatData);
-
 	send({ 'message': 'addPlayer', 'combatData': playerCombatData });
 
 	resize(); // needed to update tile and other objects sizes based on map size
+}
+
+function onCreatureMovementSync()
+{
+	if (!combatSystem) return;
+	if (this.id == playerID) return;
+	const movement = state.creatures[this.id].movement;
+	combatSystem.setCreatureMovement(this.id, movement.x, movement.y);
 }
 
 function onCreaturePositionChanged(creatureID, position, direction)
@@ -282,11 +308,67 @@ function onCreaturePositionChanged(creatureID, position, direction)
 	}
 }
 
+function onCreaturePositionSync(changes)
+{
+	if (!combatSystem) return;
+	
+	const pos = combatSystem.getCreaturePosition(this.id);
+	let setNewPos = false;
+	changes.forEach(change =>
+	{
+		if (change.field == 'x')
+		{
+			if (Math.abs(pos.x - change.value) > FoFcombat.FoFSprite.SIZE)
+			{
+				pos.x = change.value;
+				setNewPos = true;
+			}
+		}
+		else if (change.field == 'y')
+		{
+			if (Math.abs(pos.y - change.value) > FoFcombat.FoFSprite.SIZE)
+			{
+				pos.y = change.value;
+				setNewPos = true;
+			}
+		}
+	});
+	if (setNewPos)
+	{
+		console.log('Synchronizing position for %s', this.id);
+		const creature = creatures[this.id];
+		creature.position.x = pos.x
+		creature.position.y = pos.y;
+		combatSystem.setCreaturePosition(this.id, pos);
+		combatSystem.resetCreatureMovementDirection(this.id);
+	}
+}
+
 function onCreatureHPChanged(creatureID, currentHP, totalHP, changeType)
 {
 	const creature = creatures[creatureID];
 	creature.HP.current = currentHP;
 	creature.HP.total = totalHP;
+}
+
+function onCreatureHPSync(changes)
+{
+	if (!combatSystem) return;
+	
+	const creature = creatures[this.id];
+	changes.forEach(change =>
+	{
+		if (change.field == 'current')
+		{
+			creature.HP.current = change.value;
+			combatSystem.setCreatureCurrentHP(this.id, change.value);
+		}
+		else if (change.field == 'total')
+		{
+			creature.HP.total = change.value;
+			combatSystem.setCreatureTotalHP(this.id, change.value);
+		}
+	});
 }
 
 function onCreatureAttack(creatureID, animSetName, direction)
@@ -373,7 +455,10 @@ function makeCreatureCombatDataFromPlainObject(data)
 	for (let i in data.abilities)
 	{
 		const a = data.abilities[i];
-		abilities[i] = a;
+		if (typeof(a) == 'number')
+		{
+			abilities[i] = a;
+		}
 	}
 	combatData.abilities = abilities;
 	
@@ -381,12 +466,15 @@ function makeCreatureCombatDataFromPlainObject(data)
 	for (let i in data.equipment)
 	{
 		const e = data.equipment[i];
-		equipment[i] = e;
+		if (typeof(e) == 'number')
+		{
+			equipment[i] = e;
+		}
 	}
 	combatData.equipment = equipment;
 
 	const spells = new FoFcombat.VectorCombatSpell();
-	for (let i in data.spells)
+	for (let i = 0; i < data.spells.length; ++i)
 	{
 		const s = data.spells[i];
 		const cs = new FoFcombat.CombatSpell();
@@ -397,7 +485,7 @@ function makeCreatureCombatDataFromPlainObject(data)
 	combatData.spells = spells;
 
 	const talents = new FoFcombat.VectorCombatTalent();
-	for (let i in data.talents)
+	for (let i = 0; i < data.talents.length; ++i)
 	{
 		const t = data.talents[i];
 		const ct = new FoFcombat.CombatTalent();
@@ -447,20 +535,6 @@ function addCreature(creature)
 	combatSystem.setCreaturePosition(creature.id, new FoFcombat.Vector2(creature.position.x, creature.position.y));
 }
 
-function handleAbilityChanged(data)
-{
-	const creature = creatures[data.creatureID];
-	if (creature)
-	{
-		if (data.HP)
-		{
-			creature.HP.current = data.HP.current;
-			creature.HP.total = data.HP.total;
-			combatSystem.setCreatureHP(data.creatureID, data.HP.current, data.HP.total);
-		}
-	}
-}
-
 function handleEffectPlayRequested(data)
 {
 	// here we imitate handling blood effect
@@ -508,24 +582,6 @@ function handlePlayerUsedSpell(position)
 
 	combatSystem.setCreatureUsedSpell(playerID, selectedActionButton.spellID, new FoFcombat.Vector2(position.x, position.y));
 	send({ 'message': 'spellUsed', 'spellID': selectedActionButton.spellID, 'position': position });
-}
-
-function sync(data)
-{
-	const halfTileSize = FoFcombat.FoFSprite.SIZE / 2;
-	for (let i in data)
-	{
-		const d = data[i];
-		const creature = creatures[d.creatureID];
-		if (Math.abs(creature.position.x - d.position.x) > halfTileSize || Math.abs(creature.position.y - d.position.y) > halfTileSize)
-		{
-			console.log('Synchronizing position for %s', d.creatureID);
-			creature.position.x = d.position.x;
-			creature.position.y = d.position.y;
-			combatSystem.setCreaturePosition(d.creatureID, new FoFcombat.Vector2(creature.position.x, creature.position.y));
-			combatSystem.resetCreatureMovementDirection(d.creatureID);
-		}
-	}
 }
 
 function update(time)
