@@ -131,6 +131,9 @@ function connect()
 
 		state.creatures.onAdd = (creature, id) =>
 		{
+			// TODO: for now this is workaround of strange behavior
+			if (id.length == 0) return;
+
 			if (id == playerID)
 			{
 				loadingLabel = null;
@@ -148,16 +151,22 @@ function connect()
 				}
 			}
 
-			creature.movement.onChange = onCreatureMovementSync.bind(creature);
 			creature.position.onChange = onCreaturePositionSync.bind(creature);
 			creature.HP.onChange = onCreatureHPSync.bind(creature);
+			if (id != playerID)
+			{
+				creature.movement.onChange = onCreatureMovementSync.bind(creature);
+				creature.selectedWeapon.onChange = onCreatureSelectedWeaponSync.bind(creature);
+				creature.selectedAmmo.onChange = onCreatureSelectedAmmoSync.bind(creature);
+			}
 		};
 
-    state.creatures.onRemove = (creature, id) =>
+		state.creatures.onRemove = (creature, id) =>
 		{
-			delete creatures[data.killedCreatureID];
-    	combatSystem.removeCreature(data.creatureID);
-    };
+			delete creatures[id];
+			combatSystem.removeCreature(data.creatureID);
+			isDead = (id == playerID);
+		};
 
 		room.onLeave(() =>
 		{
@@ -184,22 +193,8 @@ function handleMessage(data)
 				loadingLabel = 'Loading error';
 			});
 		break;
-		case 'movement':
-			combatSystem.setCreatureMovement(data.creatureID, data.movementX, data.movementY);
-		break;
-		case 'swapWeapon':
-			combatSystem.swapCreatureWeapon(data.creatureID);
-		break;
-		case 'swapAmmo':
-			combatSystem.swapCreatureAmmo(data.creatureID);
-		break;
 		case 'spellUsed':
 			combatSystem.setCreatureUsedSpell(data.creatureID, data.spellID, new FoFcombat.Vector2(data.position.x, data.position.y));
-		break;
-		case 'creatureKilled':
-			delete creatures[data.killedCreatureID];
-			combatSystem.removeCreature(data.killedCreatureID);
-			isDead = (data.killedCreatureID == playerID);
 		break;
 		case 'effectRequested':
 			handleEffectPlayRequested(data);
@@ -274,10 +269,10 @@ function initCombatSystem()
 	combatSystem.addProjectileOnRemovedHandler(onProjectileRemovedHandler);
 
 	// adding already existing creatures
-	pendingCreaturesToAdd.forEach(creature =>
+	for (let i = 0; i < pendingCreaturesToAdd.length; ++i)
 	{
-		addCreature(creature);
-	});
+		addCreature(pendingCreaturesToAdd[i]);	
+	}
 	pendingCreaturesToAdd = [];
 
 	// sending message to add self
@@ -291,7 +286,6 @@ function initCombatSystem()
 function onCreatureMovementSync()
 {
 	if (!combatSystem) return;
-	if (this.id == playerID) return;
 	const movement = state.creatures[this.id].movement;
 	combatSystem.setCreatureMovement(this.id, movement.x, movement.y);
 }
@@ -314,11 +308,12 @@ function onCreaturePositionSync(changes)
 	
 	const pos = combatSystem.getCreaturePosition(this.id);
 	let setNewPos = false;
-	changes.forEach(change =>
+	for (let i = 0; i < changes.length; ++i)
 	{
+		const change = changes[i];
 		if (change.field == 'x')
 		{
-			if (Math.abs(pos.x - change.value) > FoFcombat.FoFSprite.SIZE)
+			if (Math.abs(pos.x - change.value) >= FoFcombat.FoFSprite.SIZE)
 			{
 				pos.x = change.value;
 				setNewPos = true;
@@ -326,13 +321,13 @@ function onCreaturePositionSync(changes)
 		}
 		else if (change.field == 'y')
 		{
-			if (Math.abs(pos.y - change.value) > FoFcombat.FoFSprite.SIZE)
+			if (Math.abs(pos.y - change.value) >= FoFcombat.FoFSprite.SIZE)
 			{
 				pos.y = change.value;
 				setNewPos = true;
 			}
 		}
-	});
+	}
 	if (setNewPos)
 	{
 		console.log('Synchronizing position for %s', this.id);
@@ -342,6 +337,18 @@ function onCreaturePositionSync(changes)
 		combatSystem.setCreaturePosition(this.id, pos);
 		combatSystem.resetCreatureMovementDirection(this.id);
 	}
+}
+
+function onCreatureSelectedWeaponSync(changes)
+{
+	if (!combatSystem) return;
+	combatSystem.selectCreatureWeapon(this.id, changes[0].value);
+}
+
+function onCreatureSelectedAmmoSync(changes)
+{
+	if (!combatSystem) return;
+	combatSystem.selectCreatureAmmo(this.id, changes[0].value);
 }
 
 function onCreatureHPChanged(creatureID, currentHP, totalHP, changeType)
@@ -356,8 +363,9 @@ function onCreatureHPSync(changes)
 	if (!combatSystem) return;
 	
 	const creature = creatures[this.id];
-	changes.forEach(change =>
+	for (let i = 0; i < changes.length; ++i)
 	{
+		const change = changes[i];
 		if (change.field == 'current')
 		{
 			creature.HP.current = change.value;
@@ -368,7 +376,7 @@ function onCreatureHPSync(changes)
 			creature.HP.total = change.value;
 			combatSystem.setCreatureTotalHP(this.id, change.value);
 		}
-	});
+	}
 }
 
 function onCreatureAttack(creatureID, animSetName, direction)
@@ -500,9 +508,12 @@ function makeCreatureCombatDataFromPlainObject(data)
 
 function addSelf(creature)
 {
-	delete creature.combatData; // we don't need this field locally
-	creature.direction = { 'x': 0, 'y': -1 };
-	creatures[creature.id] = creature;
+	creatures[creature.id] = {
+		'id': creature.id,
+		'position': { 'x': creature.position.x, 'y': creature.position.y },
+		'direction': { 'x': creature.lookDirection.x, 'y': creature.lookDirection.y },
+		'HP': { 'current': creature.HP.current, 'total': creature.HP.total }
+	};
 
 	combatSystem.addPlayer(playerID, 0);
 	combatSystem.setCreatureFloor(playerID, creature.position.z);
@@ -525,11 +536,14 @@ function addSelf(creature)
 
 function addCreature(creature)
 {
-	const combatData = makeCreatureCombatDataFromPlainObject(creature.combatData);
-	delete creature.combatData; // we don't need this field anymore
-	creature.direction = { 'x': 0, 'y': -1 };
-	creatures[creature.id] = creature;
+	creatures[creature.id] = {
+		'id': creature.id,
+		'position': { 'x': creature.position.x, 'y': creature.position.y },
+		'direction': { 'x': creature.lookDirection.x, 'y': creature.lookDirection.y },
+		'HP': { 'current': creature.HP.current, 'total': creature.HP.total }
+	};
 
+	const combatData = makeCreatureCombatDataFromPlainObject(creature.combatData);
 	combatSystem.addCreature(creature.id, combatData);
 	combatSystem.setCreatureFloor(creature.id, creature.position.z);
 	combatSystem.setCreaturePosition(creature.id, new FoFcombat.Vector2(creature.position.x, creature.position.y));
