@@ -249,6 +249,8 @@ function initCombatSystem()
 
 	const onCreaturePositionChangedHandler = new FoFcombat.CreaturePositionChangedCallback(onCreaturePositionChanged);
 	combatSystem.addCreatureOnPositionChangedHandler(onCreaturePositionChangedHandler);
+	const onCreatureLookDirectionChangedHandler = new FoFcombat.CreatureLookDirectionChangedCallback(onCreatureLookDirectionChanged);
+	combatSystem.addCreatureOnLookDirectionChangedHandler(onCreatureLookDirectionChangedHandler);
 
 	if (!CONNECT)
 	{
@@ -300,6 +302,13 @@ function onCreaturePositionChanged(creatureID, position, direction)
 		creature.direction.x = direction.x;
 		creature.direction.y = direction.y;
 	}
+}
+
+function onCreatureLookDirectionChanged(creatureID, lookDirection)
+{
+	const creature = creatures[creatureID];
+	creature.direction.x = lookDirection.x;
+	creature.direction.y = lookDirection.y;
 }
 
 function onCreaturePositionSync(changes)
@@ -518,6 +527,7 @@ function addSelf(creature)
 	combatSystem.addPlayer(playerID, 0);
 	combatSystem.setCreatureFloor(playerID, creature.position.z);
 	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(creature.position.x, creature.position.y));
+	combatSystem.setCreatureLookDirection(playerID, new FoFcombat.Vector2(creature.lookDirection.x, creature.lookDirection.y));
 
 	// for now not using real spells, instead making two action buttons, one for melee attack and one for ranged attack
 	actionButtons.push({
@@ -547,6 +557,7 @@ function addCreature(creature)
 	combatSystem.addCreature(creature.id, combatData);
 	combatSystem.setCreatureFloor(creature.id, creature.position.z);
 	combatSystem.setCreaturePosition(creature.id, new FoFcombat.Vector2(creature.position.x, creature.position.y));
+	combatSystem.setCreatureLookDirection(playerID, new FoFcombat.Vector2(creature.lookDirection.x, creature.lookDirection.y));
 }
 
 function handleEffectPlayRequested(data)
