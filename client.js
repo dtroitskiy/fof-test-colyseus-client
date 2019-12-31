@@ -101,20 +101,15 @@ FoFcombat.onRuntimeInitialized = () =>
 function connect()
 {
 	let url = '';
-	if (location.hostname == 'localhost')
-	{
-		// used for local testing
-		url = 'ws://localhost:8080';
-	}
-	else if (location.hostname == '192.168.1.200')
-	{
-		// used for LAN testing
-		url = 'ws://192.168.1.200:8080';
-	}
-	else
+	if (location.hostname.match(/heroku/))
 	{
 		// used for remote testing on something like Heroku
 		url = 'wss://' + location.hostname.replace('client', 'server');
+	}
+	else
+	{
+		// used for arbitrary host / IP
+		url = 'ws://' + location.hostname + ':8000';
 	}
 	const client = new Colyseus.Client(url);
 
