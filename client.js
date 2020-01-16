@@ -1,15 +1,17 @@
 'use strict';
 
 const CONNECT = true;
-const TEST_PLAYER_POS = { 'x': 20, 'y': 15 };
 
 const LOADING_COLOR = 'rgb(0, 255, 0)';
 const LOADING_FONT = '36px Arial';
 const LOADING_PROGRESS_BAR_SIZE_FACTORS = { 'width': 0.2, 'height': 0.1 };
 const LOADING_V_SPACING_FACTOR = 0.02;
+
 const TILE_SPACING = 1;
 const TILE_FREE_COLOR = 'rgb(192, 255, 192)';
 const TILE_BLOCKING_COLOR = 'rgb(255, 192, 192)';
+
+const CREATURE_MOVEMENT_SIMULATION_MIN_THRESHOLD = 1 / 30;
 const CREATURE_SIZE_FACTOR = 0.75;
 const CREATURE_DIR_TRIANGLE_ANGLE = Math.PI / 4;
 const CREATURE_COLOR = 'rgb(0, 0, 255)';
@@ -18,8 +20,10 @@ const CREATURE_NAME_COLOR = 'black';
 const CREATURE_HP_BAR_BG_COLOR = 'rgb(128, 128, 128)';
 const CREATURE_HP_BAR_FILL_COLOR = 'rgb(255, 0, 0)';
 const CREATURE_HP_BAR_LINE_WIDTH = 2;
+
 const PROJECTILE_SIZE_FACTOR = 0.1;
 const PROJECTILE_COLOR = 'rgb(51, 17, 0)';
+
 const ACTION_BUTTON_SIZE_FACTOR = 0.075;
 const ACTION_BUTTON_SPACING_FACTOR = 0.15;
 const ACTION_BUTTON_Y_FACTOR = 0.9;
@@ -27,6 +31,7 @@ const ACTION_BUTTON_BG_COLOR = 'rgb(243, 183, 0)';
 const ACTION_BUTTON_BG_HL_COLOR = 'rgb(255, 200, 33)';
 const ACTION_BUTTON_LABEL_COLOR = 'rgb(255, 255, 255)';
 const ACTION_BUTTON_LABEL_FONT_SIZE_FACTOR = 0.2;
+
 const DEATH_MESSAGE_TEXT_COLOR = 'rgb(200, 0, 0)';
 const DEATH_MESSAGE_TITLE_FONT = '36px Arial';
 const DEATH_MESSAGE_HINT_FONT = '18px Arial';
@@ -34,12 +39,16 @@ const DEATH_MESSAGE_FRAME_COLOR = 'rgb(200, 0, 0)';
 const DEATH_MESSAGE_BG_COLOR = 'rgb(255, 255, 255)';
 const DEATH_MESSAGE_FRAME_WIDTH_FACTOR = 0.01;
 const DEATH_MESSAGE_SPACING_FACTOR = 1.0;
+
 const BLOOD_EFFECT_COLOR = 'rgb(255, 0, 0)';
 const BLOOD_EFFECT_CHARACTER = '*';
 const BLOOD_EFFECT_FONT = 'Arial';
 const BLOOD_EFFECT_MIN_FONT_SIZE_FACTOR = 1;
 const BLOOD_EFFECT_MAX_FONT_SIZE_FACTOR = 4;
 const BLOOD_EFFECT_TIME = 0.25;
+
+// debug
+const DBG_TAP_TO_CHANGE_POS = false;
 
 let loadingLabel = 'Initializing', loadingPercentage = 0;
 
@@ -68,7 +77,7 @@ let actionButtonsPanelWidth = 0, actionButtonsPanelX = 0, actionButtonsPanelY = 
 let actionButtonLabelFont = null;
 let selectedActionButton = null;
 
-let lastUpdateTime = 0;
+let lastUpdateTime = 0, totalTime = 0;
 
 let leftPressed = false, rightPressed = false, upPressed = false, downPressed = false;
 let lastMovementX = 0, lastMovementY = 0;
@@ -146,11 +155,12 @@ function connect()
 				}
 			}
 
-			creature.position.onChange = onCreaturePositionSync.bind(creature);
 			creature.HP.onChange = onCreatureHPSync.bind(creature);
 			if (id != playerID)
 			{
-				creature.movement.onChange = onCreatureMovementSync.bind(creature);
+				creature.position.onChange = onCreaturePositionSync.bind(creature);
+				creature.movementDirection.onChange = onCreatureMovementDirectionSync.bind(creature);
+				creature.lookDirection.onChange = onCreatureLookDirectionSync.bind(creature);
 				creature.selectedWeapon.onChange = onCreatureSelectedWeaponSync.bind(creature);
 				creature.selectedAmmo.onChange = onCreatureSelectedAmmoSync.bind(creature);
 			}
@@ -179,17 +189,13 @@ function handleMessage(data)
 	switch (data.message)
 	{
 		case 'load':
-			load(data.map).then(() =>
-			{
-				loadingLabel = 'Waiting for server';
-				initCombatSystem();
-			}, () =>
-			{
-				loadingLabel = 'Loading error';
-			});
+			handleLoad(data);
+		break;
+		case 'positionRejected':
+			handlePositionRejected();
 		break;
 		case 'spellUsed':
-			combatSystem.setCreatureUsedSpell(data.creatureID, data.spellID, new FoFcombat.Vector2(data.position.x, data.position.y));
+			handleSpellUsed(data);
 		break;
 		case 'effectRequested':
 			handleEffectPlayRequested(data);
@@ -198,6 +204,50 @@ function handleMessage(data)
 }
 
 // LOGIC
+function handleLoad(data)
+{
+	load(data.map).then(() =>
+	{
+		loadingLabel = 'Waiting for server';
+		initCombatSystem();
+	}, () =>
+	{
+		loadingLabel = 'Loading error';
+	});
+}
+
+function handlePositionRejected()
+{
+	console.log('POSITION REJECTED!');
+
+	// resetting position of the creature with one saved in state
+	const pos = state.creatures[playerID].position;
+	
+	const creature = creatures[playerID];
+	creature.position.x = pos.x;
+	creature.position.y = pos.y;
+	creature.lastPositionUpdateTime = totalTime;
+	
+	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(pos.x, pos.y));
+}
+
+function handleSpellUsed(data)
+{
+	combatSystem.setCreatureUsedSpell(data.creatureID, data.spellID, new FoFcombat.Vector2(data.position.x, data.position.y));
+}
+
+function handleEffectPlayRequested(data)
+{
+	// here we imitate handling blood effect
+	if (data.effectObjectID >= 5 && data.effectObjectID <= 14)
+	{
+		effects[data.effectID] = {
+			'position': data.position,
+			'time': BLOOD_EFFECT_TIME
+		};
+	}
+}
+
 function load(mapName)
 {
 	return new Promise((resolve, reject) =>
@@ -280,67 +330,63 @@ function initCombatSystem()
 	resize(); // needed to update tile and other objects sizes based on map size
 }
 
-function onCreatureMovementSync()
-{
-	if (!combatSystem) return;
-	const movement = state.creatures[this.id].movement;
-	combatSystem.setCreatureMovement(this.id, movement.x, movement.y);
-}
-
 function onCreaturePositionChanged(creatureID, position, direction)
 {
 	const creature = creatures[creatureID];
 	creature.position.x = position.x;
 	creature.position.y = position.y;
+	creature.movementDirection.x = direction.x;
+	creature.movementDirection.y = direction.y;
 	if (direction.x != 0 || direction.y != 0)
 	{
-		creature.direction.x = direction.x;
-		creature.direction.y = direction.y;
+		creature.lookDirection.x = direction.x;
+		creature.lookDirection.y = direction.y;
 	}
+
+	send({ 'message': 'position', 'position': creature.position, 'direction': creature.movementDirection });
 }
 
 function onCreatureLookDirectionChanged(creatureID, lookDirection)
 {
 	const creature = creatures[creatureID];
-	creature.direction.x = lookDirection.x;
-	creature.direction.y = lookDirection.y;
+	creature.lookDirection.x = lookDirection.x;
+	creature.lookDirection.y = lookDirection.y;
 }
 
 function onCreaturePositionSync(changes)
 {
 	if (!combatSystem) return;
+
+	const pos = state.creatures[this.id].position;
 	
-	const pos = combatSystem.getCreaturePosition(this.id);
-	let setNewPos = false;
-	for (let i = 0; i < changes.length; ++i)
-	{
-		const change = changes[i];
-		if (change.field == 'x')
-		{
-			if (Math.abs(pos.x - change.value) >= FoFcombat.FoFSprite.SIZE)
-			{
-				pos.x = change.value;
-				setNewPos = true;
-			}
-		}
-		else if (change.field == 'y')
-		{
-			if (Math.abs(pos.y - change.value) >= FoFcombat.FoFSprite.SIZE)
-			{
-				pos.y = change.value;
-				setNewPos = true;
-			}
-		}
-	}
-	if (setNewPos)
-	{
-		console.log('Synchronizing position for %s', this.id);
-		const creature = creatures[this.id];
-		creature.position.x = pos.x
-		creature.position.y = pos.y;
-		combatSystem.setCreaturePosition(this.id, pos);
-		combatSystem.resetCreatureMovementDirection(this.id);
-	}
+	const creature = creatures[this.id];
+	creature.position.x = pos.x;
+	creature.position.y = pos.y;
+	creature.lastPositionUpdateTime = totalTime;
+	
+	combatSystem.setCreaturePosition(this.id, new FoFcombat.Vector2(pos.x, pos.y));
+}
+
+function onCreatureMovementDirectionSync(changes)
+{
+	if (!combatSystem) return;
+
+	const dir = state.creatures[this.id].movementDirection;
+
+	const creature = creatures[this.id];
+	creature.movementDirection.x = dir.x;
+	creature.movementDirection.y = dir.y;
+}
+
+function onCreatureLookDirectionSync(changes)
+{
+	if (!combatSystem) return;
+
+	const dir = state.creatures[this.id].lookDirection;
+
+	const creature = creatures[this.id];
+	creature.lookDirection.x = dir.x;
+	creature.lookDirection.y = dir.y;
 }
 
 function onCreatureSelectedWeaponSync(changes)
@@ -386,8 +432,8 @@ function onCreatureHPSync(changes)
 function onCreatureAttack(creatureID, animSetName, direction)
 {
 	const creature = creatures[creatureID];
-	creature.direction.x = direction.x;
-	creature.direction.y = direction.y;
+	creature.lookDirection.x = direction.x;
+	creature.lookDirection.y = direction.y;
 }
 
 function onProjectileAdded(projectileID, projectileObjectID, position, floor, direction, length)
@@ -510,14 +556,21 @@ function makeCreatureCombatDataFromPlainObject(data)
 	return combatData;
 }
 
-function addSelf(creature)
+function addInternalCreature(creature)
 {
 	creatures[creature.id] = {
 		'id': creature.id,
 		'position': { 'x': creature.position.x, 'y': creature.position.y },
-		'direction': { 'x': creature.lookDirection.x, 'y': creature.lookDirection.y },
+		'lastPositionUpdateTime': 0,
+		'movementDirection': { 'x': creature.movementDirection.x, 'y': creature.movementDirection.y },
+		'lookDirection': { 'x': creature.lookDirection.x, 'y': creature.lookDirection.y },
 		'HP': { 'current': creature.HP.current, 'total': creature.HP.total }
 	};
+}
+
+function addSelf(creature)
+{
+	addInternalCreature(creature);
 
 	combatSystem.addPlayer(playerID, 0);
 	combatSystem.setCreatureFloor(playerID, creature.position.z);
@@ -541,30 +594,13 @@ function addSelf(creature)
 
 function addCreature(creature)
 {
-	creatures[creature.id] = {
-		'id': creature.id,
-		'position': { 'x': creature.position.x, 'y': creature.position.y },
-		'direction': { 'x': creature.lookDirection.x, 'y': creature.lookDirection.y },
-		'HP': { 'current': creature.HP.current, 'total': creature.HP.total }
-	};
+	addInternalCreature(creature);
 
 	const combatData = makeCreatureCombatDataFromPlainObject(creature.combatData);
 	combatSystem.addCreature(creature.id, combatData);
 	combatSystem.setCreatureFloor(creature.id, creature.position.z);
 	combatSystem.setCreaturePosition(creature.id, new FoFcombat.Vector2(creature.position.x, creature.position.y));
 	combatSystem.setCreatureLookDirection(playerID, new FoFcombat.Vector2(creature.lookDirection.x, creature.lookDirection.y));
-}
-
-function handleEffectPlayRequested(data)
-{
-	// here we imitate handling blood effect
-	if (data.effectObjectID >= 5 && data.effectObjectID <= 14)
-	{
-		effects[data.effectID] = {
-			'position': data.position,
-			'time': BLOOD_EFFECT_TIME
-		};
-	}
 }
 
 function handleMovement()
@@ -581,10 +617,32 @@ function handleMovement()
 	{
 		combatSystem.setCreatureMovement(playerID, movementX, movementY);
 
-		send({ 'message': 'movement', 'movementX': movementX, 'movementY': movementY });
-		
 		lastMovementX = movementX;
 		lastMovementY = movementY;
+	}
+}
+
+function simulateMovement()
+{
+	for (let id in creatures)
+	{
+		if (id == playerID) continue;
+
+		const creature = creatures[id];
+
+		const dt = totalTime - creature.lastPositionUpdateTime;
+		if (dt >= CREATURE_MOVEMENT_SIMULATION_MIN_THRESHOLD)
+		{
+			const stateCreature = state.creatures[id];
+			const moveDir = stateCreature.movementDirection;
+			if (moveDir.x != 0 || moveDir.y != 0)
+			{
+				const speed = stateCreature.combatData.abilities.moveSpeed;
+				creature.position.x += moveDir.x * speed * dt;
+				creature.position.y += moveDir.y * speed * dt;
+				creature.lastPositionUpdateTime = totalTime;
+			}
+		}
 	}
 }
 
@@ -606,10 +664,13 @@ function handlePlayerUsedSpell(position)
 
 function update(time)
 {
-	let dt = (time - lastUpdateTime) / 1000;
+	const dt = (time - lastUpdateTime) / 1000;
 	lastUpdateTime = time;
+	totalTime += dt;
 	
 	handleMovement();
+	// TODO: not using for now
+	// simulateMovement();
 	
 	if (combatSystem) combatSystem.update(dt);
 
@@ -689,25 +750,53 @@ document.addEventListener('mouseup', function(event)
 	if (!isConnected || isDead) return;
 	if (event.button != 0) return;
 
-	let actionButtonSelected = false;
+	let actionButtonClicked = false;
 	for (let i = 0; i < actionButtons.length; ++i)
 	{
 		const buttonX = actionButtonsPanelX + i * (actionButtonSize + actionButtonSpacing);
 		if (event.x >= buttonX && event.x <= buttonX + actionButtonSize &&
 		    event.y >= actionButtonsPanelY && event.y <= actionButtonsPanelY + actionButtonSize)
 		{
-			selectedActionButton = actionButtons[i];
-			actionButtonSelected = true;
+			if (selectedActionButton == actionButtons[i])
+			{
+				selectedActionButton = null;
+			}
+			else
+			{
+				selectedActionButton = actionButtons[i];
+				actionButtonClicked = true;
+			}
 			break;
 		}
 	}
 	// if action button wasn't clicked, then it's click on the map
-	// and we must handle spell usage if it's already selected
-	if (!actionButtonSelected && selectedActionButton)
+	if (!actionButtonClicked)
 	{
-		const tileSizeFactor = tileSize / FoFcombat.FoFSprite.SIZE;
-		const pos = { 'x': (event.x - mapDrawX) / tileSizeFactor, 'y': (event.y - mapDrawY) / tileSizeFactor };
-		handlePlayerUsedSpell(pos);
+		// and if action button has been previously selected, we must handle spell usage
+		if (selectedActionButton)
+		{
+			const tileSizeFactor = tileSize / FoFcombat.FoFSprite.SIZE;
+			const pos = { 'x': (event.x - mapDrawX) / tileSizeFactor, 'y': (event.y - mapDrawY) / tileSizeFactor };
+			handlePlayerUsedSpell(pos);
+		}
+		// otherwise it may be click to set position (testing feature)
+		else if (DBG_TAP_TO_CHANGE_POS)
+		{
+			const pos = {};
+			pos.x = Math.floor((event.x - mapDrawX) / tileSize) * FoFcombat.FoFSprite.SIZE + FoFcombat.FoFSprite.SIZE / 2;
+			pos.y = Math.floor((event.y - mapDrawY) / tileSize) * FoFcombat.FoFSprite.SIZE + FoFcombat.FoFSprite.SIZE / 2;
+
+			if (combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(pos.x, pos.y)))
+			{
+				combatSystem.resetCreatureMovementDirection(playerID);
+
+				const creature = creatures[playerID];
+				creature.position.x = pos.x;
+				creature.position.y = pos.y;
+				
+				send({ 'message': 'position', 'position': pos, 'direction': creature.movementDirection });
+			}
+		}
 	}
 });
 
@@ -830,15 +919,15 @@ function drawCreatures()
 		canvas2d.arc(x, y, creatureHalfSize, 0, Math.PI * 2);
 		canvas2d.fill();
 
-		// drawing direction triangle
+		// drawing lookDirection triangle
 		canvas2d.beginPath();
-		const tipX = x + creature.direction.x * halfTileSize, tipY = y + creature.direction.y * halfTileSize;
+		const tipX = x + creature.lookDirection.x * halfTileSize, tipY = y + creature.lookDirection.y * halfTileSize;
 		canvas2d.moveTo(tipX, tipY);
-		const side1X = x + (creature.direction.x * minusAngleCos - creature.direction.y * minusAngleSin) * creatureHalfSize;
-		const side1Y = y + (creature.direction.x * minusAngleSin + creature.direction.y * minusAngleCos) * creatureHalfSize;
+		const side1X = x + (creature.lookDirection.x * minusAngleCos - creature.lookDirection.y * minusAngleSin) * creatureHalfSize;
+		const side1Y = y + (creature.lookDirection.x * minusAngleSin + creature.lookDirection.y * minusAngleCos) * creatureHalfSize;
 		canvas2d.lineTo(side1X, side1Y);
-		const side2X = x + (creature.direction.x * plusAngleCos - creature.direction.y * plusAngleSin) * creatureHalfSize;
-		const side2Y = y + (creature.direction.x * plusAngleSin + creature.direction.y * plusAngleCos) * creatureHalfSize;
+		const side2X = x + (creature.lookDirection.x * plusAngleCos - creature.lookDirection.y * plusAngleSin) * creatureHalfSize;
+		const side2Y = y + (creature.lookDirection.x * plusAngleSin + creature.lookDirection.y * plusAngleCos) * creatureHalfSize;
 		canvas2d.lineTo(side2X, side2Y);
 		canvas2d.closePath();
 		canvas2d.fill();
