@@ -169,7 +169,7 @@ function connect()
 		state.creatures.onRemove = (creature, id) =>
 		{
 			delete creatures[id];
-			combatSystem.removeCreature(data.creatureID);
+			combatSystem.removeCreature(id);
 			isDead = (id == playerID);
 		};
 
@@ -648,16 +648,6 @@ function simulateMovement()
 
 function handlePlayerUsedSpell(position)
 {
-	// because we're using artificial melee & ranged attack buttons
-	// we manually verify selected button and currently equipped weapon (assuming that default melee weapon - sword - has ID 1)
-	const weaponID = combatSystem.getCreatureCurrentWeaponID(playerID);
-	if ((selectedActionButton.spellStrID == 'melee_attack' && weaponID != 1) ||
-	    (selectedActionButton.spellStrID == 'ranged_attack' && weaponID == 1))
-	{
-		combatSystem.swapCreatureWeapon(playerID);
-		send({ 'message': 'swapWeapon' });
-	}
-
 	combatSystem.setCreatureUsedSpell(playerID, selectedActionButton.spellID, new FoFcombat.Vector2(position.x, position.y));
 	send({ 'message': 'spellUsed', 'spellID': selectedActionButton.spellID, 'position': position });
 }
@@ -765,6 +755,16 @@ document.addEventListener('mouseup', function(event)
 			{
 				selectedActionButton = actionButtons[i];
 				actionButtonClicked = true;
+
+				// because we're using artificial melee & ranged attack buttons
+				// we manually verify selected button and currently equipped weapon (assuming that default melee weapon - sword - has ID 1)
+				const weaponID = combatSystem.getCreatureCurrentWeaponID(playerID);
+				if ((selectedActionButton.spellStrID == 'melee_attack' && weaponID != 1) ||
+				    (selectedActionButton.spellStrID == 'ranged_attack' && weaponID == 1))
+				{
+					combatSystem.swapCreatureWeapon(playerID);
+					send({ 'message': 'swapWeapon' });
+				}
 			}
 			break;
 		}
