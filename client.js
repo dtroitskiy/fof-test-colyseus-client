@@ -24,13 +24,13 @@ const CREATURE_HP_BAR_LINE_WIDTH = 2;
 const PROJECTILE_SIZE_FACTOR = 0.1;
 const PROJECTILE_COLOR = 'rgb(51, 17, 0)';
 
-const ACTION_BUTTON_SIZE_FACTOR = 0.075;
-const ACTION_BUTTON_SPACING_FACTOR = 0.15;
+const ACTION_BUTTON_SIZE_FACTOR = 0.09;
+const ACTION_BUTTON_SPACING_FACTOR = 0.1;
 const ACTION_BUTTON_Y_FACTOR = 0.9;
 const ACTION_BUTTON_BG_COLOR = 'rgb(243, 183, 0)';
 const ACTION_BUTTON_BG_HL_COLOR = 'rgb(255, 200, 33)';
 const ACTION_BUTTON_LABEL_COLOR = 'rgb(255, 255, 255)';
-const ACTION_BUTTON_LABEL_FONT_SIZE_FACTOR = 0.2;
+const ACTION_BUTTON_LABEL_FONT_SIZE_FACTOR = 0.18;
 
 const DEATH_MESSAGE_TEXT_COLOR = 'rgb(200, 0, 0)';
 const DEATH_MESSAGE_TITLE_FONT = '36px Arial';
@@ -577,7 +577,7 @@ function addSelf(creature)
 	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(creature.position.x, creature.position.y));
 	combatSystem.setCreatureLookDirection(playerID, new FoFcombat.Vector2(creature.lookDirection.x, creature.lookDirection.y));
 
-	// for now not using real spells, instead making two action buttons, one for melee attack and one for ranged attack
+	// making two action buttons for melee and ranged attacks separately to avoid implementing functionality for weapon swap here
 	actionButtons.push({
 		'spellID': 1,
 		'spellStrID': 'melee_attack',
@@ -588,6 +588,22 @@ function addSelf(creature)
 		'spellStrID': 'ranged_attack',
 		'label': '2\nRanged\nAttack'
 	});
+
+	// then adding other real spells
+	const spells = FoFcombat.DB.getInstance().getPlayerSpells(false, false, true, true, 0);
+	for (let i = 1; i < spells.size(); ++i) // starting from 1 to skip weapon attack
+	{
+		const spell = spells.get(i);
+		let name = spell.name;
+		name = name.replace(' ', '\n');
+		name = name.replace('Fireball', 'Fireball\n ');
+		name = name.replace('Watercannon', 'Water\nCannon');
+		actionButtons.push({
+			'spellID': spell.rowID,
+			'spellStrID': spell.icon,
+			'label': (i + 2) + '\n' + name
+		});
+	}
 
 	resize();
 }
