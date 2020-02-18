@@ -135,9 +135,6 @@ function connect()
 
 		state.creatures.onAdd = (creature, id) =>
 		{
-			// TODO: for now this is workaround of strange behavior
-			if (id.length == 0) return;
-
 			if (id == playerID)
 			{
 				loadingLabel = null;
@@ -194,8 +191,14 @@ function handleMessage(data)
 		case 'positionRejected':
 			handlePositionRejected();
 		break;
+		case 'abilityChanged':
+			handleAbilityChanged(data);
+		break;
 		case 'spellUsed':
 			handleSpellUsed(data);
+		break;
+		case 'creatureEnabledDisabled':
+			handleCreatureEnabledDisabled(data);
 		break;
 		case 'effectRequested':
 			handleEffectPlayRequested(data);
@@ -231,9 +234,19 @@ function handlePositionRejected()
 	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(pos.x, pos.y));
 }
 
+function handleAbilityChanged(data)
+{
+	combatSystem.setCreatureAbility(data.creatureID, data.what, data.newValue);
+}
+
 function handleSpellUsed(data)
 {
 	combatSystem.setCreatureUsedSpell(data.creatureID, data.spellID, new FoFcombat.Vector2(data.position.x, data.position.y));
+}
+
+function handleCreatureEnabledDisabled(data)
+{
+	combatSystem.setCreatureEnabled(data.creatureID, data.enabled);
 }
 
 function handleEffectPlayRequested(data)
@@ -444,7 +457,7 @@ function onProjectileAdded(projectileID, projectileObjectID, position, floor, di
 	};
 }
 
-function onProjectilePositionChanged(projectileID, position)
+function onProjectilePositionChanged(projectileID, position, length)
 {
 	const projectile = projectiles[projectileID];
 	projectile.position.x = position.x;
