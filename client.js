@@ -110,14 +110,14 @@ FoFcombat.onRuntimeInitialized = () =>
 function connect()
 {
 	let url = '';
-	if (location.hostname.match(/heroku/))
+	if (location.hostname.indexOf('elasticbeanstalk') != -1)
 	{
-		// used for remote testing on something like Heroku
-		url = 'wss://' + location.hostname.replace('client', 'server');
+		// for AWS
+		url = 'ws://fof-server-dev.eu-central-1.elasticbeanstalk.com'
 	}
 	else
 	{
-		// used for arbitrary host / IP
+		// for arbitrary host / IP
 		url = 'ws://' + location.hostname + ':8000';
 	}
 	const client = new Colyseus.Client(url);
@@ -229,9 +229,10 @@ function handlePositionRejected()
 	const creature = creatures[playerID];
 	creature.position.x = pos.x;
 	creature.position.y = pos.y;
+	creature.position.z = pos.z;
 	creature.lastPositionUpdateTime = totalTime;
 	
-	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(pos.x, pos.y));
+	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(pos.x, pos.y), pos.z);
 }
 
 function handleAbilityChanged(data)
@@ -343,11 +344,15 @@ function initCombatSystem()
 	resize(); // needed to update tile and other objects sizes based on map size
 }
 
-function onCreaturePositionChanged(creatureID, position, direction)
+function onCreaturePositionChanged(creatureID, position, floor, direction)
 {
 	const creature = creatures[creatureID];
 	creature.position.x = position.x;
 	creature.position.y = position.y;
+	if (floor != -1)
+	{
+		creature.position.z = floor;
+	}
 	creature.movementDirection.x = direction.x;
 	creature.movementDirection.y = direction.y;
 	if (direction.x != 0 || direction.y != 0)
@@ -355,8 +360,16 @@ function onCreaturePositionChanged(creatureID, position, direction)
 		creature.lookDirection.x = direction.x;
 		creature.lookDirection.y = direction.y;
 	}
+	creature.moveSpeed = combatSystem.getCreatureMoveSpeed(creatureID);
+	creature.moveSpeedPercentage = combatSystem.getCreatureMoveSpeedPercentage(creatureID);
 
-	send({ 'message': 'position', 'position': creature.position, 'direction': creature.movementDirection });
+	send({
+		'message': 'position',
+		'position': { 'x': position.x, 'y': position.y, 'z': floor },
+		'direction': creature.movementDirection,
+		'moveSpeed': creature.moveSpeed,
+		'moveSpeedPercentage': creature.moveSpeedPercentage
+	});
 }
 
 function onCreatureLookDirectionChanged(creatureID, lookDirection)
@@ -375,9 +388,15 @@ function onCreaturePositionSync(changes)
 	const creature = creatures[this.id];
 	creature.position.x = pos.x;
 	creature.position.y = pos.y;
+	let floor = -1;
+	if (pos.z != combatSystem.getCreatureFloor(this.id))
+	{
+		creature.position.z = pos.z;
+		floor = pos.z;
+	}
 	creature.lastPositionUpdateTime = totalTime;
 	
-	combatSystem.setCreaturePosition(this.id, new FoFcombat.Vector2(pos.x, pos.y));
+	combatSystem.setCreaturePosition(this.id, new FoFcombat.Vector2(pos.x, pos.y), floor);
 }
 
 function onCreatureMovementDirectionSync(changes)
@@ -573,10 +592,12 @@ function addInternalCreature(creature)
 {
 	creatures[creature.id] = {
 		'id': creature.id,
-		'position': { 'x': creature.position.x, 'y': creature.position.y },
+		'position': { 'x': creature.position.x, 'y': creature.position.y, 'z': creature.position.z },
 		'lastPositionUpdateTime': 0,
 		'movementDirection': { 'x': creature.movementDirection.x, 'y': creature.movementDirection.y },
 		'lookDirection': { 'x': creature.lookDirection.x, 'y': creature.lookDirection.y },
+		'moveSpeed': 0,
+		'moveSpeedPercentage': 0,
 		'HP': { 'current': creature.HP.current, 'total': creature.HP.total }
 	};
 }
@@ -586,8 +607,7 @@ function addSelf(creature)
 	addInternalCreature(creature);
 
 	combatSystem.addPlayer(playerID, 0);
-	combatSystem.setCreatureFloor(playerID, creature.position.z);
-	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(creature.position.x, creature.position.y));
+	combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(creature.position.x, creature.position.y), creature.position.z);
 	combatSystem.setCreatureLookDirection(playerID, new FoFcombat.Vector2(creature.lookDirection.x, creature.lookDirection.y));
 
 	// making two action buttons for melee and ranged attacks separately to avoid implementing functionality for weapon swap here
@@ -627,9 +647,8 @@ function addCreature(creature)
 
 	const combatData = makeCreatureCombatDataFromPlainObject(creature.combatData);
 	combatSystem.addCreature(creature.id, combatData);
-	combatSystem.setCreatureFloor(creature.id, creature.position.z);
-	combatSystem.setCreaturePosition(creature.id, new FoFcombat.Vector2(creature.position.x, creature.position.y));
-	combatSystem.setCreatureLookDirection(playerID, new FoFcombat.Vector2(creature.lookDirection.x, creature.lookDirection.y));
+	combatSystem.setCreaturePosition(creature.id, new FoFcombat.Vector2(creature.position.x, creature.position.y), creature.position.z);
+	combatSystem.setCreatureLookDirection(creature.id, new FoFcombat.Vector2(creature.lookDirection.x, creature.lookDirection.y));
 }
 
 function handleMovement()
@@ -814,8 +833,9 @@ document.addEventListener('mouseup', function(event)
 			const pos = {};
 			pos.x = Math.floor((event.x - mapDrawX) / tileSize) * FoFcombat.FoFSprite.SIZE + FoFcombat.FoFSprite.SIZE / 2;
 			pos.y = Math.floor((event.y - mapDrawY) / tileSize) * FoFcombat.FoFSprite.SIZE + FoFcombat.FoFSprite.SIZE / 2;
+			pos.z = creature.position.z;
 
-			if (combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(pos.x, pos.y)))
+			if (combatSystem.setCreaturePosition(playerID, new FoFcombat.Vector2(pos.x, pos.y), -1))
 			{
 				combatSystem.resetCreatureMovementDirection(playerID);
 
@@ -941,6 +961,8 @@ function drawCreatures()
 	for (let id in creatures)
 	{
 		const creature = creatures[id];
+		// for now drawing creatures only on ground floor
+		if (creature.position.z != FoFcombat.UniversalTileMap.GROUND_FLOOR) continue;
 
 		// drawing creature circle
 		const x = mapDrawX + creature.position.x * tileSizeFactor, y = mapDrawY + creature.position.y * tileSizeFactor;
