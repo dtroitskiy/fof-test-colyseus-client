@@ -10,7 +10,7 @@ http.createServer(function(req, res)
 	{
 		if (err)
 		{
-			let message404 = "There is no such page!";
+			let message404 = 'There is no such page!';
 			res.writeHead(404, { 'Content-Type': 'text/html', 'Content-Length': message404.length });
 			res.write(message404);
 		}
